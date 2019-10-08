@@ -6,8 +6,10 @@
  * @copyright University of Pennsylvania
  */
  // Useful places to look
- // https://github.com/LiangliangNan/Easy3D
- // https://docs.opencv.org/master/d4/d18/tutorial_sfm_scene_reconstruction.html
+// https://github.com/LiangliangNan/Easy3D
+// https://docs.opencv.org/master/d4/d18/tutorial_sfm_scene_reconstruction.html
+// Inverse: https://github.com/md-akhi/Inverse-matrix/blob/master/Inverse-matrix.cpp
+
 
  // Steps:
  // SIFT
@@ -30,6 +32,7 @@
 #include <cmath>
 #include <iomanip>
 #include <cusolver_common.h>
+#include "SfM/kernals.h"
 
 int ImproveHomography(SiftData &data, float *homography, int numLoops, float minScore, float maxAmbiguity, float thresh);
 void PrintMatchData(SiftData &siftData1, SiftData &siftData2, CudaImage &img);
@@ -82,20 +85,34 @@ int main(int argc, char **argv)
 
 	// Match Sift features and find a homography
 	MatchSiftData(siftData1, siftData2);
-	float homography[9];
+	/*float homography[9];
 	int numMatches;
 	FindHomography(siftData1, homography, &numMatches, 10000, 0.00f, 0.80f, 5.0);
 	int numFit = ImproveHomography(siftData1, homography, 5, 0.00f, 0.80f, 2.0);
 
 	std::cout << "Number of original features: " << siftData1.numPts << " " << siftData2.numPts << std::endl;
 	std::cout << "Number of matching features: " << numFit << " " << numMatches << " " << 100.0f*numFit / std::min(siftData1.numPts, siftData2.numPts) << "% " << initBlur << " " << thresh << std::endl;
-	//}
+	*/
+	// Define kernal matrix
+	float K[9] = {2360.0, 0, w/2.0, 
+		         0, 2360, h/2.0,
+		         0,0,1};
+	float inv_K[9] = {1.0 / 2360, 0, -(w/2.0) / 2360,
+		           0, 1.0 / 2360, -(h/2.0) / 2360,
+					0, 0, 1};
+	SfM::Image_pair sfm(K, inv_K, 2, siftData1.numPts);
+	sfm.FillXU(siftData1.d_data);
+	sfm.estimateE();
 
 	//MatchAll(siftData1, siftData2, homography);
 	showCorrespondence(siftData1, siftData2, limg, rimg);
 	// Free Sift data from device
 	FreeSiftData(siftData1);
 	FreeSiftData(siftData2);
+}
+
+void estimate_E() {
+
 }
 
 void MatchAll(SiftData &siftData1, SiftData &siftData2, float *homography)

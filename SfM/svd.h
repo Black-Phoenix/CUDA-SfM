@@ -27,12 +27,12 @@
 #include "math.h" // CUDA math library
 
 
-// CUDA's rsqrt seems to be faster than the inlined approximation?
+// CUDA's 1.0/sqrtf seems to be faster than the inlined approximation?
 
 __host__ __device__ __forceinline__
 float accurateSqrt(float x)
 {
-    return x * rsqrt(x);
+    return x * 1.0/sqrtf(x);
 }
 
 __host__ __device__ __forceinline__
@@ -76,16 +76,16 @@ void multAB(float a11, float a12, float a13,
 // matrix multiplication M = Transpose[A] * B
 __host__ __device__ __forceinline__
 void multAtB(float a11, float a12, float a13,
-          float a21, float a22, float a23,
-          float a31, float a32, float a33,
-          //
-          float b11, float b12, float b13,
-          float b21, float b22, float b23,
-          float b31, float b32, float b33,
-          //
-          float &m11, float &m12, float &m13,
-          float &m21, float &m22, float &m23,
-          float &m31, float &m32, float &m33)
+	float a21, float a22, float a23,
+	float a31, float a32, float a33,
+	//
+	float b11, float b12, float b13,
+	float b21, float b22, float b23,
+	float b31, float b32, float b33,
+	//
+	float &m11, float &m12, float &m13,
+	float &m21, float &m22, float &m23,
+	float &m31, float &m32, float &m33)
 {
   m11=a11*b11 + a21*b21 + a31*b31; m12=a11*b12 + a21*b22 + a31*b32; m13=a11*b13 + a21*b23 + a31*b33;
   m21=a12*b11 + a22*b21 + a32*b31; m22=a12*b12 + a22*b22 + a32*b32; m23=a12*b13 + a22*b23 + a32*b33;
@@ -129,7 +129,7 @@ void approximateGivensQuaternion(float a11, float a12, float a22, float &ch, flo
     ch = 2*(a11-a22);
     sh = a12;
     bool b = _gamma*sh*sh < ch*ch;
-    float w = rsqrt(ch*ch+sh*sh);
+    float w = 1.0/sqrtf(ch*ch+sh*sh);
     ch=b?w*ch:_cstar;
     sh=b?w*sh:_sstar;
 }
@@ -258,7 +258,7 @@ void QRGivensQuaternion(float a1, float a2, float &ch, float &sh)
     ch = fabs(a1) + fmax(rho,epsilon);
     bool b = a1 < 0;
     condSwap(b,sh,ch);
-    float w = rsqrt(ch*ch+sh*sh);
+    float w = 1.0/sqrtf(ch*ch+sh*sh);
     ch *= w;
     sh *= w;
 }
@@ -329,22 +329,22 @@ void QRDecomposition(// matrix that we want to decompose
 }
 
 __host__ __device__ __forceinline__
-void svd(// input A
-        float a11, float a12, float a13,
-        float a21, float a22, float a23,
-        float a31, float a32, float a33,
-        // output U
-        float &u11, float &u12, float &u13,
-        float &u21, float &u22, float &u23,
-        float &u31, float &u32, float &u33,
-        // output S
-        float &s11, float &s12, float &s13,
-        float &s21, float &s22, float &s23,
-        float &s31, float &s32, float &s33,
-        // output V
-        float &v11, float &v12, float &v13,
-        float &v21, float &v22, float &v23,
-        float &v31, float &v32, float &v33)
+void svd(//output A
+	float a11, float a12, float a13,
+	float a21, float a22, float a23,
+	float a31, float a32, float a33,
+	// output U
+	float &u11, float &u12, float &u13,
+	float &u21, float &u22, float &u23,
+	float &u31, float &u32, float &u33,
+	// output S
+	float &s11, float &s12, float &s13,
+	float &s21, float &s22, float &s23,
+	float &s31, float &s32, float &s33,
+	// output V
+	float &v11, float &v12, float &v13,
+	float &v21, float &v22, float &v23,
+	float &v31, float &v32, float &v33)
 {
     // normal equations matrix
     float ATA11, ATA12, ATA13;

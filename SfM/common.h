@@ -9,7 +9,11 @@
 #include <algorithm>
 #include <chrono>
 #include <stdexcept>
+#include <string>
+#include <iostream>
+#include <iomanip>
 
+using namespace std;
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define checkCUDAError(msg) checkCUDAErrorFn(msg, FILENAME, __LINE__)
 
@@ -32,6 +36,7 @@ inline int ilog2ceil(int x) {
 
 
 namespace Common {
+#define enable_debug true
     /**
     * This class is used for timing the performance
     * Uncopyable and unmovable
@@ -123,4 +128,5 @@ namespace Common {
 	    float prev_elapsed_time_cpu_milliseconds = 0.f;
 	    float prev_elapsed_time_gpu_milliseconds = 0.f;
     };
+	
 }
