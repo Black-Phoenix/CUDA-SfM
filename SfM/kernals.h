@@ -31,6 +31,7 @@ namespace SfM {
 		cublasHandle_t handle;
 		// Internal functions
 		void batch_svd_device(float *A, float *U, float *S, float *V, int m, int n, const int batchSize, int *d_info);
+		int * calculateInliers(float *d_E_canidate, int ransac_iter);
 	public:
 		Image_pair(float k[9], float k_inv[9], int image_count, int num_points);
 		void fillXU(SiftPoint *data);
@@ -38,6 +39,8 @@ namespace SfM {
 		void testSVD();
 		void computePoseCanidates();
 		void choosePose();
+		void testBatchedmult();
+		void testThrust_max();
 		~Image_pair() {
 			cudaFree(d_K);
 			cudaFree(d_K_inv);

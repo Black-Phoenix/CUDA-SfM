@@ -15,6 +15,9 @@
 #include <iomanip>      
 #include <random>
 #include <algorithm>
+#include <thrust/extrema.h>
+#include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
 
 namespace Kernals {
 #define enable_debug true
@@ -101,14 +104,7 @@ namespace Kernals {
 	/*		Kernals			*/
 	//////////////////////////////
 	// C(m,n) = A(m,k) * B(k,n)
-	// lda = k (if transposed)
-	// ldb = n (if we transpose)
-	// ldb = n (if we transpose)
-	void gpu_blas_mmul(const float *A, const float *B, float *C, const int m, const int k, const int n, bool trans_flag_a, bool trans_flag_b) {
-		int lda, ldb, ldc;
-		lda = (!trans_flag_a) ? m : k;
-		ldb = (!trans_flag_b) ? k : n;
-		ldc = m;
+	void gpu_blas_mmul(const float *A, const float *B, float *C, const int m, const int k, const int n) {
 		const float alf = 1; // gpu vs cpu
 		const float bet = 0;
 		const float *alpha = &alf;
@@ -116,7 +112,21 @@ namespace Kernals {
 		// Do the actual multiplication
 		cublasHandle_t handle;
 		cublasCreate(&handle);
-		cublasSgemm(handle, (cublasOperation_t)trans_flag_a, (cublasOperation_t)trans_flag_b, n, m, k, alpha, B, n, A, k, beta, C, n);
+		cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, alpha, B, n, A, k, beta, C, n);
+		cublasDestroy(handle);
+	}
+	// C(m,n) = A(m,k) * B(k,n)
+	void gpu_blas_mmul_batched(const float *A, const float *B, float *C, const int m, const int k, const int n, const int stride_A, const int stride_B, const int stride_C, const int batches) {
+		assert(stride_A == 0 || stride_A == m * k);
+		assert(stride_B == 0 || stride_B == n * k);
+		assert(stride_C == 0 || stride_C == m * n);
+		cublasHandle_t handle;
+		cublasCreate(&handle);
+		const float alf = 1; // gpu vs cpu
+		const float bet = 0;
+		const float *alpha = &alf;
+		const float *beta = &bet;
+		cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, alpha, B, n, stride_B, A, k, stride_A, beta, C, n, stride_C, batches);
 		cublasDestroy(handle);
 	}
 
@@ -168,7 +178,7 @@ namespace Kernals {
 	__global__
 		void normalizeE(float *E, int ransac_iterations) {
 		const int index = blockIdx.x*blockDim.x + threadIdx.x;
-		if (index > ransac_iterations)
+		if (index >= ransac_iterations)
 			return;
 		float u[9], d[9], v[9];
 		svd(&(E[access3(0, 0, index, 3, 3)]), u, d, v); // find correct E
@@ -179,6 +189,72 @@ namespace Kernals {
 		float tmp_u[9];
 		multAB(u, d, tmp_u);
 		multABt(tmp_u, v, &(E[access3(0, 0, index, 3, 3)]));
+	}
+
+	__global__
+		void element_wise_mult(float *A, float *B, int size) {
+		const int index = blockIdx.x*blockDim.x + threadIdx.x;
+		if (index >= size)
+			return;
+		A[index] *= B[index];
+	}
+
+	__global__
+		void element_wise_div(float *A, float *B, int size) {
+		const int index = blockIdx.x*blockDim.x + threadIdx.x;
+		if (index >= size)
+			return;
+		float val = B[index];
+		if (val == 0)
+			A[index] = 0;
+		else
+			A[index] /= val;
+	}
+
+	__global__
+		void element_wise_sum(float *A, float *B, int size) {
+		const int index = blockIdx.x*blockDim.x + threadIdx.x;
+		if (index >= size)
+			return;
+		A[index] += B[index];
+	}
+
+	__global__ 
+		void vecnorm(float *A, float *res, int row, int col, int exp,int final_pow) {
+		int index = blockIdx.x*blockDim.x + threadIdx.x;
+		if (index >= col)
+			return;
+		float tmp_vlaue = 0;
+#pragma unroll
+		for (int i = 0; i < row; i++) {
+			tmp_vlaue += powf(A[access2(i, index, col)], exp);
+		}
+		// Now we can take the sqrt of exp and then rais to the final_pow
+		if (exp == final_pow)
+			return;
+		res[index] = powf(tmp_vlaue, final_pow / exp);
+	}
+
+	__global__
+		void threshold_count(float *A, int *count_res, int batch_size, int ransac_count, float threshold) {
+		int index = blockIdx.x*blockDim.x + threadIdx.x;
+		if (index >= ransac_count)
+			return;
+		int count = 0;
+#pragma unroll
+		for (int i = 0; i < batch_size; i++) {
+			if (A[i + index * batch_size] < threshold)
+				count++;
+		}
+		count_res[index] = count;
+	}
+
+	template<typename T>
+	T* cuda_alloc_copy(const T* host, int size) {
+		T* data;
+		cudaMalloc((void**)&data, size * sizeof(T));
+		cudaMemcpy(data, host, size * sizeof(T), cudaMemcpyHostToDevice);
+		return data;
 	}
 }
 
@@ -210,6 +286,7 @@ namespace SfM {
 			d_T.push_back(d_tmp);
 		}
 	}
+
 	void Image_pair::estimateE() {
 		const int ransac_count = floor(num_points / 8);
 		// Create random order of points (on cpu using std::shuffle)
@@ -236,19 +313,24 @@ namespace SfM {
 		float *d_E_canidate;
 		cudaMalloc((void **)&d_E_canidate, 3 * 3 * ransac_count * sizeof(float));
 		// Calculate batch SVD
-
 		// Last column of V becomes E
 		// Calculate target E's
 		
 		Kernals::normalizeE << <grids, cuda_block_size >> > (d_E_canidate, ransac_count);
 		// Calculate number of inliers for each E
-
-		// Pick best E and allocate d_E and E
-
+		int *inliers = calculateInliers(d_E_canidate, ransac_count);
+		// Pick best E and allocate d_E and E using thrust
+		thrust::device_ptr<int> dv_in(inliers);
+		auto iter = thrust::max_element(dv_in, dv_in + ransac_count);
+		unsigned int best_pos = (iter - dv_in) - 1;
+		// Assigne d_E
+		cudaMemcpy(d_E, &(d_E_canidate[access3(0, 0, best_pos, 3, 3)]), 3 * 3 * sizeof(float), cudaMemcpyDeviceToDevice);
 		// Free stuff
+		cudaFree(inliers);
 		cudaFree(d_A);
 		cudaFree(d_indices);
 		free(indices);
+		cudaFree(d_E_canidate);
 	}
 
 	void Image_pair::fillXU(SiftPoint *data) {
@@ -259,9 +341,92 @@ namespace SfM {
 		Kernals::copy_point << <grids, blocks >> > (data, num_points, U[0], U[1]);
 		Kernals::printMatrix(U[0], 3, num_points, 5, "U[0]");
 		// Fill X using X = inv(K) * U
-		Kernals::gpu_blas_mmul(d_K_inv, U[0], X[0], 3, 3, num_points, false, false);
-		Kernals::gpu_blas_mmul(d_K_inv, U[1], X[1], 3, 3, num_points, false, false);
+		Kernals::gpu_blas_mmul(d_K_inv, U[0], X[0], 3, 3, num_points);
+		Kernals::gpu_blas_mmul(d_K_inv, U[1], X[1], 3, 3, num_points);
 		Kernals::printMatrix(X[0], 3, num_points, 5, "X[0]");
+	}
+
+	int * Image_pair::calculateInliers(float *d_E_canidate, int ransac_iter) {
+		/// This function calculates n1, d1, n2, d2 and then finds the number of residuals per E canidate in X[0] and X[1]
+		// Init E1
+		float E1[9] = { 0, -1, 0, 1, 0, 0, 0, 0, 0 };
+		float *d_E1;
+		cudaMalloc((void **)&d_E1, 9 * sizeof(float));
+		cudaMemcpy(d_E1, E1, 9 * sizeof(float), cudaMemcpyHostToDevice);
+		// Allocs
+		float *x1_transformed, *x2_transformed;
+		cudaMalloc((void**)&x1_transformed, 3 * num_points * ransac_iter * sizeof(float));
+		cudaMalloc((void**)&x2_transformed, 3 * num_points * ransac_iter * sizeof(float));
+		float *d1, *d2;
+		cudaMalloc((void**)&d1, 3 * num_points * ransac_iter * sizeof(float));
+		cudaMalloc((void**)&d2, 3 * num_points * ransac_iter * sizeof(float));
+		float *n1, *n2;
+		cudaMalloc((void **)&n1, 3 * num_points * ransac_iter * sizeof(float));
+		cudaMalloc((void **)&n2, 3 * num_points * ransac_iter * sizeof(float));
+		// Calculate x1 (from matlab code) {
+			int m = 3, k = 3, n = num_points;
+			Kernals::gpu_blas_mmul_batched(d_E_canidate, X[0], x1_transformed, m, k, n, m*k, 0, m* n, ransac_iter); 
+			//Compute n1 
+			m = 3, k = num_points, n = 3; // these probably need to change because we need to transpose X[1]
+			Kernals::gpu_blas_mmul_batched(X[1], d_E_canidate, n1, m, k, n, 0, 3 * 3, m * k, ransac_iter); // TODO transpose X[1]
+			int blocks = ceil((3 * num_points + cuda_block_size - 1) / cuda_block_size); // BUG!!! we need to make this batched
+			Kernals::element_wise_mult <<<blocks, cuda_block_size>>> (n1, X[0], 3 * num_points);
+			// Compute d1
+			// d1 = E1 * x1_transformed
+			m = 3, k = 3, n = num_points;
+			Kernals::gpu_blas_mmul_batched(d_E_canidate, x1_transformed, d1, m, k, n, m*k, 0, m* n, ransac_iter);
+		// }
+		// Now calculate x2_transformed, n2 and d2 {
+			m = 3, k = 3, n = num_points;
+			Kernals::gpu_blas_mmul_batched(d_E_canidate, X[1], x2_transformed, m, k, n, m*k, 0, m* n, ransac_iter);
+			//Compute n2
+			m = 3, k = num_points, n = 3; // these probably need to change because we need to transpose X[0]
+			Kernals::gpu_blas_mmul_batched(X[0], d_E_canidate, n2, m, k, n, 0, 3 * 3, m * k, ransac_iter); // TODO transpose X[0]
+			blocks = ceil((3 * num_points + cuda_block_size - 1) / cuda_block_size);
+			Kernals::element_wise_mult << <blocks, cuda_block_size >> > (n2, X[1], 3 * num_points);
+			// Compute d2
+			m = 3, k = 3, n = num_points;
+			Kernals::gpu_blas_mmul_batched(d_E_canidate, x2_transformed, d2, m, k, n, m*k, 0, m* n, ransac_iter);
+		// }
+		// Now calculate the residual per canidate E{
+			float *norm_n1, *norm_n2, *norm_d1, *norm_d2;
+			int *inliers;
+			int size = num_points * ransac_iter;
+			cudaMalloc((void**)&norm_n1, size * sizeof(float));
+			cudaMalloc((void**)&norm_n2, size * sizeof(float));
+			cudaMalloc((void**)&norm_d1, size * sizeof(float));
+			cudaMalloc((void**)&norm_d2, size * sizeof(float));
+			cudaMalloc((void**)&inliers, ransac_iter * sizeof(int));
+			blocks = ceil((num_points * ransac_iter + cuda_block_size - 1) / cuda_block_size);
+			Kernals::vecnorm<<<blocks, cuda_block_size>>>(n1, norm_n1, 3, size, 1, 2);
+			Kernals::vecnorm<<<blocks, cuda_block_size>>>(n2, norm_n2, 3, size, 1, 2);
+																		  
+			Kernals::vecnorm<<<blocks, cuda_block_size>>>(d1, norm_d1, 3, size, 2, 2);
+			Kernals::vecnorm<<<blocks, cuda_block_size>>>(d1, norm_d1, 3, size, 2, 2);
+
+			Kernals::element_wise_div << <blocks, cuda_block_size >> > (norm_n1, norm_d1, size);
+			Kernals::element_wise_div << <blocks, cuda_block_size >> > (norm_n2, norm_d2, size);
+			// We now have the residuals in norm_n1
+			Kernals::element_wise_sum << <blocks, cuda_block_size >> > (norm_n1, norm_n2, size);
+			// Calculate inliers per cell
+			blocks = ceil((ransac_iter + cuda_block_size - 1) / cuda_block_size);
+			Kernals::threshold_count << <blocks, cuda_block_size >> > (norm_n1, inliers, num_points, ransac_iter, 1e-5);
+		//}
+		// Not sure if we should free
+		cudaFree(n1);
+		cudaFree(n2);
+		cudaFree(d1);
+		cudaFree(d2);
+		cudaFree(x1_transformed);
+		cudaFree(x2_transformed);
+		// Free the norms!!!
+		cudaFree(norm_n1);
+		cudaFree(norm_n2);
+		cudaFree(norm_d1);
+		cudaFree(norm_d2);
+		// 100% free
+		cudaFree(d_E1);
+		return inliers;
 	}
 
 	void Image_pair::computePoseCanidates() {
@@ -294,6 +459,46 @@ namespace SfM {
 		}
 	}
 
+
+	void Image_pair::testBatchedmult() {
+		// C(m,n) = A(m,k) * B(k,n)
+		float A[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8 };
+		float B[] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
+		float *d_A, *d_B, *d_C;
+		// Alloc
+		cudaMalloc((void**)&d_A, 9 * 2 * sizeof(float));
+		cudaMalloc((void**)&d_B, 9 * sizeof(float));
+		cudaMalloc((void**)&d_C, 6 * 3 * sizeof(float));
+		// Copy
+		cudaMemcpy(d_A, A, 9 * 2 * sizeof(float), cudaMemcpyHostToDevice);
+		cudaMemcpy(d_B, B, 9 * sizeof(float), cudaMemcpyHostToDevice);
+
+		int m = 3, k = 1, n = 3;
+		int lda = m;
+		int ldb = k;
+		int ldc = m;
+		cublasHandle_t handle;
+		cublasCreate(&handle);
+		const float alf = 1; // gpu vs cpu
+		const float bet = 0;
+		const float *alpha = &alf;
+		const float *beta = &bet;
+		int sA = 3;
+		int sB = 0;
+		int sC = 3;
+		int batches = 6;
+		/*cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+			m, n, k, alpha, d_A, lda, 9, d_B, ldb, 0,
+			beta, d_C, ldc, 3, 2);*/
+		cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, alpha, d_B, n, sB, d_A, k, sA, beta, d_C, n, sC, batches);
+		cublasDestroy(handle);
+		Kernals::printVector(d_C, 6 * 3, "C");
+
+		// Free test stuff
+		cudaFree(d_A);
+		cudaFree(d_B);
+		cudaFree(d_C);
+	}
 	void Image_pair::testSVD() {
 		float A[9] = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
 		float u[9], d[9], v[9];
@@ -313,5 +518,17 @@ namespace SfM {
 				cout << d[access2(i, j, 3)] << "\t";
 			cout << endl;
 		}
+	}
+	void Image_pair::testThrust_max() {
+		int a[] = { 1,2,3,4,5,6, 4, 1, 3 };
+		int *d_A = Kernals::cuda_alloc_copy<int>(a, 7);
+		
+		thrust::device_ptr<int> dv_in(d_A);
+		auto iter = thrust::max_element(dv_in, dv_in + 6);
+
+		unsigned int position = iter - dv_in;
+		int max_val = *iter;
+		cudaFree(d_A);
+		std::cout << "The maximum value is " << max_val << " at position " << position << std::endl;
 	}
 }
