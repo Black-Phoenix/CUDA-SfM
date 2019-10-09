@@ -61,7 +61,7 @@ namespace Kernals {
 			for (int j = 0; j < col; j++) {
 				if (j < print_col || j > col - print_col - 1) {
 					T Areg = print_a[access2(i, j, col)];
-					cout << std::fixed << setprecision(3) << "\t"  << Areg;
+					cout << std::fixed << setprecision(3) << "\t" << Areg;
 				}
 				else if (j == print_col) {
 					cout << "\t....";
@@ -119,13 +119,13 @@ namespace Kernals {
 		cublasSgemm(handle, (cublasOperation_t)trans_flag_a, (cublasOperation_t)trans_flag_b, n, m, k, alpha, B, n, A, k, beta, C, n);
 		cublasDestroy(handle);
 	}
-	
-	__global__ 
-	void kron_kernal(float*d1, float*d2, float *A, int *indices, const int ransac_iterations, int num_points) {
+
+	__global__
+		void kron_kernal(float*d1, float*d2, float *A, int *indices, const int ransac_iterations, int num_points) {
 		const int index = blockIdx.x*blockDim.x + threadIdx.x;
 		const int A_row = 8;
 		const int A_col = 9;
-		
+
 		if (index > ransac_iterations)
 			return;
 #pragma unroll
@@ -146,7 +146,7 @@ namespace Kernals {
 	}
 
 	__global__
-	void copy_point(SiftPoint* data, int numPoints, float *U1, float *U2) {
+		void copy_point(SiftPoint* data, int numPoints, float *U1, float *U2) {
 		const int index_col = blockIdx.x*blockDim.x + threadIdx.x; // col is x to prevent warp divergence as much as possible in this naive implementation
 		const int index_row = blockIdx.y*blockDim.y + threadIdx.y;
 		if (index_row >= 3 || index_col >= numPoints)
@@ -164,24 +164,27 @@ namespace Kernals {
 			U2[access2(index_row, index_col, numPoints)] = 1;
 		}
 	}
-	
-	__global__ 
-	void normalizeE(float *E, int ransac_iterations) {
+
+	__global__
+		void normalizeE(float *E, int ransac_iterations) {
 		const int index = blockIdx.x*blockDim.x + threadIdx.x;
+		if (index > ransac_iterations)
+			return;
 		float u[9], d[9], v[9];
-		//svd(&(E[access3(0,0,index, 3, 3)]), u, d, v); // find correct E
-		//d[access2(2, 2, 3)] = 0;
-		//d[access2(1, 1, 3)] = 1;
-		//d[access2(0, 0, 3)] = 1;
-		//// E = U * D * V'
-		//float tmp_u[9];
-		//multAB(u, d, tmp_u);
-		//multABt(tmp_u, v, &(E[access3(0, 0, index, 3, 3)]));
+		svd(&(E[access3(0, 0, index, 3, 3)]), u, d, v); // find correct E
+		d[access2(2, 2, 3)] = 0;
+		d[access2(1, 1, 3)] = 1;
+		d[access2(0, 0, 3)] = 1;
+		// E = U * D * V'
+		float tmp_u[9];
+		multAB(u, d, tmp_u);
+		multABt(tmp_u, v, &(E[access3(0, 0, index, 3, 3)]));
 	}
 }
 
 namespace SfM {
-	Image_pair::Image_pair(float k[9], float k_inv[9], int image_count, int num_points) :image_count(image_count), num_points(num_points){ // num_points should be a array if we want to deal with more than 2 images
+
+	Image_pair::Image_pair(float k[9], float k_inv[9], int image_count, int num_points) :image_count(image_count), num_points(num_points) { // num_points should be a array if we want to deal with more than 2 images
 		cudaMalloc((void**)&d_K, 3 * 3 * sizeof(float));
 		checkCUDAErrorWithLine("Malloc failed!");
 		cudaMalloc((void**)&d_K_inv, 3 * 3 * sizeof(float));
@@ -196,10 +199,19 @@ namespace SfM {
 			cudaMalloc((void**)&d_x, 3 * num_points * sizeof(float));
 			X.push_back(d_x);
 		}
-		// SVD handles
+		// E
+		cudaMalloc((void **)&d_E, 3 * 3 * sizeof(float));
+		// Canidate R, T
+		float *d_tmp;
+		for (int i = 0; i < 2; i++) {
+			cudaMalloc((void **)&d_tmp, 3 * 3 * sizeof(float));
+			d_R.push_back(d_tmp);
+			cudaMalloc((void **)&d_tmp, 3 * sizeof(float));
+			d_T.push_back(d_tmp);
+		}
 	}
 	void Image_pair::estimateE() {
-		const int ransac_count = floor(num_points/8);
+		const int ransac_count = floor(num_points / 8);
 		// Create random order of points (on cpu using std::shuffle)
 		int *indices = new int[num_points];
 		int *d_indices;
@@ -216,22 +228,30 @@ namespace SfM {
 		cudaMalloc((void **)&d_A, 8 * 9 * ransac_count * sizeof(float));
 		checkCUDAErrorWithLine("A malloc failed!");
 		int grids = ceil((ransac_count + cuda_block_size - 1) / cuda_block_size);
-		Kernals::kron_kernal<<<grids, cuda_block_size >>>(X[0], X[1], d_A, d_indices, ransac_count, num_points);
+		Kernals::kron_kernal << <grids, cuda_block_size >> > (X[0], X[1], d_A, d_indices, ransac_count, num_points);
 		checkCUDAErrorWithLine("Kron failed!");
 		Kernals::printMatrix(X[0], 3, num_points, 9, "Kron X[0]");
 		Kernals::printMatrix(X[1], 3, num_points, 9, "Kron X[1]");
 		Kernals::print3DSlice(d_A, 8, 9, ransac_count - 1, 9, "Kron product");
+		float *d_E_canidate;
+		cudaMalloc((void **)&d_E_canidate, 3 * 3 * ransac_count * sizeof(float));
 		// Calculate batch SVD
 
+		// Last column of V becomes E
 		// Calculate target E's
+		
+		Kernals::normalizeE << <grids, cuda_block_size >> > (d_E_canidate, ransac_count);
 		// Calculate number of inliers for each E
-		// Pick best E
+
+		// Pick best E and allocate d_E and E
+
 		// Free stuff
 		cudaFree(d_A);
 		cudaFree(d_indices);
 		free(indices);
 	}
-	void Image_pair::FillXU(SiftPoint *data) {
+
+	void Image_pair::fillXU(SiftPoint *data) {
 		Kernals::printMatrix(d_K_inv, 3, 3, 3, "K inv");
 		// Fill U
 		dim3 grids(ceil((num_points + cuda_block_size - 1) / cuda_block_size), 1);
@@ -243,6 +263,37 @@ namespace SfM {
 		Kernals::gpu_blas_mmul(d_K_inv, U[1], X[1], 3, 3, num_points, false, false);
 		Kernals::printMatrix(X[0], 3, num_points, 5, "X[0]");
 	}
+
+	void Image_pair::computePoseCanidates() {
+		// We will do all of this on the cpu because it is soo simple
+		float E[9];
+		cudaMemcpy(E, d_E, 3 * 3 * sizeof(float), cudaMemcpyDeviceToHost);
+		float u[9], d[9], v[9];
+		svd(E, u, d, v);
+		float R_z[9] = { 0, -1, 0, 1, 0, 0, 0, 0, 1 };
+		float canidate_T[2][3], canidate_R[2][9];
+		// T1 = subset(U*R_z*d*U');
+		float tmp_prod[9], tmp_prod2[9], T[9];
+		for (int i = 0; i < 2; i++) {
+			if (i) {// change signs for second iter
+				R_z[1] = -R_z[1];
+				R_z[3] = -R_z[3];
+			}
+			multAB(u, R_z, tmp_prod); //U * R_z 
+			multAB(tmp_prod, d, tmp_prod2);// U * R_z * d
+			multABt(tmp_prod2, u, T);
+			canidate_T[i][0] = -T[access2(1, 2, 3)];
+			canidate_T[i][1] = T[access2(0, 2, 3)];
+			canidate_T[i][2] = -T[access2(0, 1, 3)];
+			// R1
+			multABt(u, R_z, tmp_prod);
+			multABt(tmp_prod, v, canidate_R[i]);
+			// Copy back to gpu
+			cudaMemcpy(d_R[i], canidate_R[i], 9 * sizeof(float), cudaMemcpyHostToDevice);
+			cudaMemcpy(d_T[i], canidate_T[i], 3 * sizeof(float), cudaMemcpyHostToDevice);
+		}
+	}
+
 	void Image_pair::testSVD() {
 		float A[9] = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
 		float u[9], d[9], v[9];
@@ -252,9 +303,9 @@ namespace SfM {
 		cudaMalloc((void **)&d_V, 9 * sizeof(float));
 		cudaMemcpy(d_A, A, 9 * sizeof(float), cudaMemcpyHostToDevice);*/
 		// Call svm
-		/*svd(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], 
-			u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], 
-			d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], 
+		/*svd(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8],
+			u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8],
+			d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8],
 			v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]);*/
 		svd(A, u, d, v);
 		for (int i = 0; i < 3; i++) {

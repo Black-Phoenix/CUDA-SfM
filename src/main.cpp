@@ -101,9 +101,10 @@ int main(int argc, char **argv)
 		           0, 1.0 / 2360, -(h/2.0) / 2360,
 					0, 0, 1};
 	SfM::Image_pair sfm(K, inv_K, 2, siftData1.numPts);
-	sfm.FillXU(siftData1.d_data);
+	sfm.fillXU(siftData1.d_data);
 	sfm.estimateE();
-	sfm.testSVD();
+	//sfm.testSVD();
+	sfm.computePoseCanidates();
 	//MatchAll(siftData1, siftData2, homography);
 	//showCorrespondence(siftData1, siftData2, limg, rimg);
 	// Free Sift data from device
@@ -111,9 +112,6 @@ int main(int argc, char **argv)
 	FreeSiftData(siftData2);
 }
 
-void estimate_E() {
-
-}
 
 void MatchAll(SiftData &siftData1, SiftData &siftData2, float *homography)
 {
