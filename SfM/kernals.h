@@ -31,6 +31,7 @@ namespace SfM {
 		Image_pair(float k[9], float k_inv[9], int image_count, int num_points);
 		void FillXU(SiftPoint *data);
 		void estimateE();
+		void testSVD();
 		~Image_pair() {
 			cudaFree(d_K);
 			cudaFree(d_K_inv);

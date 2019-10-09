@@ -75,18 +75,18 @@ namespace Kernals {
 	template<typename T>
 	void print3DSlice(const T*A, int row, int col, int slice, int print_col, const char* name)
 	{
-		/// Prints first and last print_col values of A if A is a 2d matrix
+		/// reads 
 		if (!enable_debug)
 			return;
-		T *print_a = new T[col*row];
-		cudaMemcpy(print_a, A, row* col * sizeof(T), cudaMemcpyDeviceToHost);
+		T *print_a = new T[col * row];
+		cudaMemcpy(print_a, A + row * col * slice, row * col * sizeof(T), cudaMemcpyDeviceToHost);
 		cout << name << endl;
 		cout << "{" << endl;
 		for (int i = 0; i < row; i++) {
 			for (int j = 0; j < col; j++) {
 				if (j < print_col || j > col - print_col - 1) {
-					T Areg = print_a[access3(i, j, slice, row, col)];
-					cout << std::setw(7) << setprecision(3) << "\t\t" << Areg;
+					T Areg = print_a[access2(i, j, col)];
+					cout << std::setw(7) << setprecision(3) << "\t" << Areg;
 				}
 				else if (j == print_col) {
 					cout << "\t....";
@@ -126,22 +126,22 @@ namespace Kernals {
 		const int A_row = 8;
 		const int A_col = 9;
 		
-		if (access3(A_row - 1, A_col - 1, index, A_row, A_col) > ransac_iterations * A_row * A_col)
+		if (index > ransac_iterations)
 			return;
 #pragma unroll
 		for (int i = 0; i < A_row; i++) {
 			// begin
-			A[access3(i, 0, index, A_row, A_col)] = d1[access2(x_pos, indices[index + i], num_points)] * d2[access2(x_pos, indices[index + i], num_points)];
-			A[access3(i, 1, index, A_row, A_col)] = d1[access2(x_pos, indices[index + i], num_points)] * d2[access2(y_pos, indices[index + i], num_points)];
-			A[access3(i, 2, index, A_row, A_col)] = d1[access2(x_pos, indices[index + i], num_points)] * d2[access2(z_pos, indices[index + i], num_points)];
-			// second												  
-			A[access3(i, 3, index, A_row, A_col)] = d1[access2(y_pos, indices[index + i], num_points)] * d2[access2(x_pos, indices[index + i], num_points)];
-			A[access3(i, 4, index, A_row, A_col)] = d1[access2(y_pos, indices[index + i], num_points)] * d2[access2(y_pos, indices[index + i], num_points)];
-			A[access3(i, 5, index, A_row, A_col)] = d1[access2(y_pos, indices[index + i], num_points)] * d2[access2(z_pos, indices[index + i], num_points)];
-			//third													  
-			A[access3(i, 6, index, A_row, A_col)] = d1[access2(z_pos, indices[index + i], num_points)] * d2[access2(x_pos, indices[index + i], num_points)];
-			A[access3(i, 7, index, A_row, A_col)] = d1[access2(z_pos, indices[index + i], num_points)] * d2[access2(y_pos, indices[index + i], num_points)];
-			A[access3(i, 8, index, A_row, A_col)] = d1[access2(z_pos, indices[index + i], num_points)] * d2[access2(z_pos, indices[index + i], num_points)];
+			A[access3(i, 0, index, A_row, A_col)] = d1[access2(x_pos, indices[index * A_row + i], num_points)] * d2[access2(x_pos, indices[index * A_row + i], num_points)];
+			A[access3(i, 1, index, A_row, A_col)] = d1[access2(x_pos, indices[index * A_row + i], num_points)] * d2[access2(y_pos, indices[index * A_row + i], num_points)];
+			A[access3(i, 2, index, A_row, A_col)] = d1[access2(x_pos, indices[index * A_row + i], num_points)] * d2[access2(z_pos, indices[index * A_row + i], num_points)];
+			// second												  			    
+			A[access3(i, 3, index, A_row, A_col)] = d1[access2(y_pos, indices[index * A_row + i], num_points)] * d2[access2(x_pos, indices[index * A_row + i], num_points)];
+			A[access3(i, 4, index, A_row, A_col)] = d1[access2(y_pos, indices[index * A_row + i], num_points)] * d2[access2(y_pos, indices[index * A_row + i], num_points)];
+			A[access3(i, 5, index, A_row, A_col)] = d1[access2(y_pos, indices[index * A_row + i], num_points)] * d2[access2(z_pos, indices[index * A_row + i], num_points)];
+			//third													  			    
+			A[access3(i, 6, index, A_row, A_col)] = d1[access2(z_pos, indices[index * A_row + i], num_points)] * d2[access2(x_pos, indices[index * A_row + i], num_points)];
+			A[access3(i, 7, index, A_row, A_col)] = d1[access2(z_pos, indices[index * A_row + i], num_points)] * d2[access2(y_pos, indices[index * A_row + i], num_points)];
+			A[access3(i, 8, index, A_row, A_col)] = d1[access2(z_pos, indices[index * A_row + i], num_points)] * d2[access2(z_pos, indices[index * A_row + i], num_points)];
 		}
 	}
 
@@ -168,7 +168,15 @@ namespace Kernals {
 	__global__ 
 	void normalizeE(float *E, int ransac_iterations) {
 		const int index = blockIdx.x*blockDim.x + threadIdx.x;
-		//svd(E);
+		float u[9], d[9], v[9];
+		//svd(&(E[access3(0,0,index, 3, 3)]), u, d, v); // find correct E
+		//d[access2(2, 2, 3)] = 0;
+		//d[access2(1, 1, 3)] = 1;
+		//d[access2(0, 0, 3)] = 1;
+		//// E = U * D * V'
+		//float tmp_u[9];
+		//multAB(u, d, tmp_u);
+		//multABt(tmp_u, v, &(E[access3(0, 0, index, 3, 3)]));
 	}
 }
 
@@ -200,18 +208,19 @@ namespace SfM {
 		// Shufle data
 		std::random_device rd;
 		std::mt19937 g(rd());
-		shuffle(indices, indices + num_points, g);
+		//shuffle(indices, indices + num_points, g);
 		// Copy data to gpu
 		cudaMemcpy(d_indices, indices, num_points * sizeof(int), cudaMemcpyHostToDevice);
 		// Calculate all kron products correctly
 		float *d_A;
-		cudaMalloc((void **)&d_A, 8 * 9 * ransac_count);
+		cudaMalloc((void **)&d_A, 8 * 9 * ransac_count * sizeof(float));
+		checkCUDAErrorWithLine("A malloc failed!");
 		int grids = ceil((ransac_count + cuda_block_size - 1) / cuda_block_size);
 		Kernals::kron_kernal<<<grids, cuda_block_size >>>(X[0], X[1], d_A, d_indices, ransac_count, num_points);
 		checkCUDAErrorWithLine("Kron failed!");
-		Kernals::printMatrix(X[0], 3, num_points, 3, "Kron X[0]");
-		Kernals::printMatrix(X[1], 3, num_points, 3, "Kron X[1]");
-		Kernals::print3DSlice(d_A, 8, 9, 0, 9, "First Kron product");
+		Kernals::printMatrix(X[0], 3, num_points, 9, "Kron X[0]");
+		Kernals::printMatrix(X[1], 3, num_points, 9, "Kron X[1]");
+		Kernals::print3DSlice(d_A, 8, 9, ransac_count - 1, 9, "Kron product");
 		// Calculate batch SVD
 
 		// Calculate target E's
@@ -234,5 +243,24 @@ namespace SfM {
 		Kernals::gpu_blas_mmul(d_K_inv, U[1], X[1], 3, 3, num_points, false, false);
 		Kernals::printMatrix(X[0], 3, num_points, 5, "X[0]");
 	}
-	
+	void Image_pair::testSVD() {
+		float A[9] = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+		float u[9], d[9], v[9];
+		/*cudaMalloc((void **)&d_A, 9 * sizeof(float));
+		cudaMalloc((void **)&d_U, 9 * sizeof(float));
+		cudaMalloc((void **)&d_D, 9 * sizeof(float));
+		cudaMalloc((void **)&d_V, 9 * sizeof(float));
+		cudaMemcpy(d_A, A, 9 * sizeof(float), cudaMemcpyHostToDevice);*/
+		// Call svm
+		/*svd(A[0], A[1], A[2], A[3], A[4], A[5], A[6], A[7], A[8], 
+			u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7], u[8], 
+			d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], 
+			v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]);*/
+		svd(A, u, d, v);
+		for (int i = 0; i < 3; i++) {
+			for (int j = 0; j < 3; j++)
+				cout << d[access2(i, j, 3)] << "\t";
+			cout << endl;
+		}
+	}
 }

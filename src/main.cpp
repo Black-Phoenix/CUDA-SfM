@@ -103,9 +103,9 @@ int main(int argc, char **argv)
 	SfM::Image_pair sfm(K, inv_K, 2, siftData1.numPts);
 	sfm.FillXU(siftData1.d_data);
 	sfm.estimateE();
-
+	sfm.testSVD();
 	//MatchAll(siftData1, siftData2, homography);
-	showCorrespondence(siftData1, siftData2, limg, rimg);
+	//showCorrespondence(siftData1, siftData2, limg, rimg);
 	// Free Sift data from device
 	FreeSiftData(siftData1);
 	FreeSiftData(siftData2);
