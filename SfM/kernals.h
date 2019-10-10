@@ -21,9 +21,9 @@ namespace SfM {
 		int image_count;
 		int num_points;
 		float *d_E;
+		int P_ind;
 		// Canidate Transforms
-		vector<float *> d_T; // 2 elements basically
-		vector<float *> d_R; // 2 elements but we permute both to get 4 possible canidates
+		float *d_P; // 4 elements
 		// Points
 		vector<float *> U; // We only use 2, this can be "extended"
 		vector<float *> X;
@@ -49,11 +49,8 @@ namespace SfM {
 				cudaFree(x);
 			for (auto x : U)
 				cudaFree(x);
-			for (auto x : d_R)
-				cudaFree(x);
-			for (auto x : d_T)
-				cudaFree(x);
 			// E
+			cudaFree(d_P);
 			cudaFree(d_E);
 		}
 	};

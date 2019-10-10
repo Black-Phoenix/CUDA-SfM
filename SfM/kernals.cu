@@ -25,8 +25,6 @@ namespace Kernals {
 #define x_pos 0
 #define y_pos 1
 #define z_pos 2
-#define access2(i, j, col) i*col + j
-#define access3(i, j, k, row, col) k * row * col + i*col + j
 	using Common::PerformanceTimer;
 	PerformanceTimer& timer()
 	{
@@ -127,6 +125,26 @@ namespace Kernals {
 		const float *alpha = &alf;
 		const float *beta = &bet;
 		cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, alpha, B, n, stride_B, A, k, stride_A, beta, C, n, stride_C, batches);
+		cublasDestroy(handle);
+	}
+
+	void gpu_blas_mmul_batched(const float *A, const float *B, float *C, const int m, const int k, const int n, const int stride_A, const int stride_B, const int stride_C, const int batches,
+		bool trans_a, bool trans_b) {
+		assert(stride_A == 0 || stride_A == m * k);
+		assert(stride_B == 0 || stride_B == n * k);
+		assert(stride_C == 0 || stride_C == m * n);
+		cublasHandle_t handle;
+		cublasCreate(&handle);
+		const float alf = 1; // gpu vs cpu
+		const float bet = 0;
+		const float *alpha = &alf;
+		const float *beta = &bet;
+		if (trans_a == 0 && trans_b == 0)
+			cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, alpha, B, n, stride_B, A, k, stride_A, beta, C, n, stride_C, batches);
+		else if (trans_a == 1 && trans_b == 0)
+			cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, n, m, k, alpha, B, n, stride_B, A, m, stride_A, beta, C, n, stride_C, batches);
+		else if (trans_a == 0 && trans_b == 1)
+			cublasSgemmStridedBatched(handle, CUBLAS_OP_T, CUBLAS_OP_N, n, m, k, alpha, B, k, stride_B, A, m, stride_A, beta, C, k, stride_C, batches);
 		cublasDestroy(handle);
 	}
 
@@ -249,6 +267,81 @@ namespace Kernals {
 		count_res[index] = count;
 	}
 
+	__global__ 
+		void canidate_kernals(float *d_P, const float *u, const float *v) {
+		int index = blockIdx.x*blockDim.x + threadIdx.x;
+		if (index >= 4) // only 4 canidate positions exist so fixed value
+			return;
+		float W[9] = { 0, -1, 0, 1, 0, 0, 0, 0, 1 }; // rotation about z axis
+		float Wt[9]; transpose_copy3x3(W, Wt, 3, 3);
+		float canidate_P[4 * 4];
+
+		float tmp_prod[9], tmp_prod2[9], T[9];
+		// T
+		canidate_P[access2(x_pos, 3, 4)] = ((!index || index == 2) ? -1 : 1) * u[access2(x_pos, 2, 3)];
+		canidate_P[access2(y_pos, 3, 4)] = ((!index || index == 2) ? -1 : 1) * u[access2(y_pos, 2, 3)];
+		canidate_P[access2(z_pos, 3, 4)] = ((!index || index == 2) ? -1 : 1) * u[access2(z_pos, 2, 3)];
+		// R
+		if (index < 2)
+			multABt(W, v, tmp_prod);
+		else
+			multABt(Wt, v, tmp_prod);
+		multAB(u, tmp_prod, tmp_prod2); // 3x3 transpose
+		transpose_copy3x3(tmp_prod2, canidate_P, 3, 4);
+		// Now we copy from 2d to 3d into d_P
+		//d_P[index] = index;
+		memcpy(&(d_P[access3(0, 0, index, 4, 4)]), canidate_P, 4 * 4 * sizeof(float));
+		d_P[access3(3, 0, index, 4, 4)] = 0; // Set last row maually
+		d_P[access3(3, 1, index, 4, 4)] = 0;
+		d_P[access3(3, 2, index, 4, 4)] = 0;
+		d_P[access3(3, 3, index, 4, 4)] = 1;
+	}
+
+	__global__
+		void compute_linear_triangulation_A(float *A, const float *pt1, const float *pt2, const int count, const int num_points, const float *m1, const float *m2, bool canidate_m2) {
+		// if canidate_m2,  we are computing 4 A's for different m2
+		// Points are 3xN and Projection matrices are 4x4
+		int index = blockIdx.x*blockDim.x + threadIdx.x;
+		int row = blockIdx.y*blockDim.y + threadIdx.y; // 2 rows, x, y
+		if (index >= count || row >= 2) 
+			return;
+		float tmp_A[2 * 4], valx, valy;
+		const float *correct_pt, *correct_m;
+		if (canidate_m2) {
+			assert(count == 4);
+			
+			if (!row) { // Slightly help with the warp divergence here
+				correct_pt = pt1;
+				correct_m = m1;
+			}
+			else {
+				correct_pt = pt2;
+				correct_m = &(m2[access3(0, 0, index, 4, 4)]);
+			}
+			valx = correct_pt[access2(x_pos, 0, num_points)]; // we only use the first point
+			valy = correct_pt[access2(y_pos, 0, num_points)];
+		}
+		else {
+			if (!row) { // Slightly help with the warp divergence here
+				correct_pt = pt1;
+				correct_m = m1;
+			}
+			else {
+				correct_pt = pt2;
+				correct_m = m2;
+			}
+			valx = correct_pt[access2(x_pos, index, num_points)];
+			valy = correct_pt[access2(y_pos, index, num_points)]; // Num points does not need to be the same as count
+		}
+		
+#pragma unroll
+		for (int i = 0; i < 4; i++) {
+			tmp_A[access2(x_pos, i, 4)] = valx * correct_m[access2(2, i, 4)] - correct_m[access2(x_pos, i, 4)];
+			tmp_A[access2(y_pos, i, 4)] = valy * correct_m[access2(2, i, 4)] - correct_m[access2(y_pos, i, 4)];
+		}
+		memcpy(&(A[access3(((!row)?0:2), 0, index, 4, 4)]), tmp_A, 4 * 2 * sizeof(float));
+	}
+
 	template<typename T>
 	T* cuda_alloc_copy(const T* host, int size) {
 		T* data;
@@ -278,13 +371,7 @@ namespace SfM {
 		// E
 		cudaMalloc((void **)&d_E, 3 * 3 * sizeof(float));
 		// Canidate R, T
-		float *d_tmp;
-		for (int i = 0; i < 2; i++) {
-			cudaMalloc((void **)&d_tmp, 3 * 3 * sizeof(float));
-			d_R.push_back(d_tmp);
-			cudaMalloc((void **)&d_tmp, 3 * sizeof(float));
-			d_T.push_back(d_tmp);
-		}
+		cudaMalloc((void **)&d_P, 4 * 4 * 4 * sizeof(float));
 	}
 
 	void Image_pair::estimateE() {
@@ -313,9 +400,10 @@ namespace SfM {
 		float *d_E_canidate;
 		cudaMalloc((void **)&d_E_canidate, 3 * 3 * ransac_count * sizeof(float));
 		// Calculate batch SVD
+
 		// Last column of V becomes E
-		// Calculate target E's
 		
+		// Calculate target E's
 		Kernals::normalizeE << <grids, cuda_block_size >> > (d_E_canidate, ransac_count);
 		// Calculate number of inliers for each E
 		int *inliers = calculateInliers(d_E_canidate, ransac_count);
@@ -343,7 +431,8 @@ namespace SfM {
 		// Fill X using X = inv(K) * U
 		Kernals::gpu_blas_mmul(d_K_inv, U[0], X[0], 3, 3, num_points);
 		Kernals::gpu_blas_mmul(d_K_inv, U[1], X[1], 3, 3, num_points);
-		Kernals::printMatrix(X[0], 3, num_points, 5, "X[0]");
+		Kernals::printMatrix(X[0], 3, num_points, 2, "X[0]");
+		Kernals::printMatrix(X[1], 3, num_points, 2, "X[1]");
 	}
 
 	int * Image_pair::calculateInliers(float *d_E_canidate, int ransac_iter) {
@@ -430,35 +519,36 @@ namespace SfM {
 	}
 
 	void Image_pair::computePoseCanidates() {
-		// We will do all of this on the cpu because it is soo simple
-		float E[9];
-		cudaMemcpy(E, d_E, 3 * 3 * sizeof(float), cudaMemcpyDeviceToHost);
-		float u[9], d[9], v[9];
-		svd(E, u, d, v);
-		float R_z[9] = { 0, -1, 0, 1, 0, 0, 0, 0, 1 };
-		float canidate_T[2][3], canidate_R[2][9];
-		// T1 = subset(U*R_z*d*U');
-		float tmp_prod[9], tmp_prod2[9], T[9];
-		for (int i = 0; i < 2; i++) {
-			if (i) {// change signs for second iter
-				R_z[1] = -R_z[1];
-				R_z[3] = -R_z[3];
-			}
-			multAB(u, R_z, tmp_prod); //U * R_z 
-			multAB(tmp_prod, d, tmp_prod2);// U * R_z * d
-			multABt(tmp_prod2, u, T);
-			canidate_T[i][0] = -T[access2(1, 2, 3)];
-			canidate_T[i][1] = T[access2(0, 2, 3)];
-			canidate_T[i][2] = -T[access2(0, 1, 3)];
-			// R1
-			multABt(u, R_z, tmp_prod);
-			multABt(tmp_prod, v, canidate_R[i]);
-			// Copy back to gpu
-			cudaMemcpy(d_R[i], canidate_R[i], 9 * sizeof(float), cudaMemcpyHostToDevice);
-			cudaMemcpy(d_T[i], canidate_T[i], 3 * sizeof(float), cudaMemcpyHostToDevice);
-		}
+		float E[9] = { 1,2,3,4,5,6,7,8,9 };
+		//cudaMemcpy(E, d_E, 3 * 3 * sizeof(float), cudaMemcpyDeviceToHost);
+		float u[9], d[9], v[9], tmp[9];
+		svd(E, u, d, v); // v is not transposed
+		multABt(u, v, tmp); // u * v'
+		if (det(tmp) < 0)
+			neg(v);
+		float *d_u, *d_v;
+		d_u = Kernals::cuda_alloc_copy(u, 3 * 3);
+		d_v = Kernals::cuda_alloc_copy(v, 3 * 3);
+		Kernals::canidate_kernals <<<1, 32 >> > (d_P, d_u, d_v);
+		cudaFree(d_u);
+		cudaFree(d_v);
 	}
+	
+	void Image_pair::choosePose() {
+		// take point 
+		float P1[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 }; // I(4)
+		float *d_P1 = Kernals::cuda_alloc_copy(P1, 16);
+		float *d_A;
+		cudaMalloc((void **)&d_A, 4 * 4 * 4 * sizeof(float));
+		cudaMemset(d_A, 0, 4 * 4 * 4 * sizeof(float));
+		// Create A
 
+		dim3 blocks(1, 1);
+		dim3 block_sizes(4, 2);
+		Kernals::compute_linear_triangulation_A << <blocks, block_sizes >> > (d_A, X[0], X[1], 4, num_points, d_P1, d_P, true);
+
+		cudaFree(d_P1);
+	}
 
 	void Image_pair::testBatchedmult() {
 		// C(m,n) = A(m,k) * B(k,n)

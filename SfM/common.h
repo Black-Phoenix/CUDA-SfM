@@ -16,6 +16,8 @@
 using namespace std;
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define checkCUDAError(msg) checkCUDAErrorFn(msg, FILENAME, __LINE__)
+#define access2(i, j, col) i*col + j
+#define access3(i, j, k, row, col) k * row * col + i*col + j
 
 /**
  * Check for CUDA errors; print and exit if there was a problem.

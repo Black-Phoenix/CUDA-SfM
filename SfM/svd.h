@@ -25,6 +25,7 @@
 
 #include <cuda.h>
 #include "math.h" // CUDA math library
+#include "common.h"
 
 
 // CUDA's 1.0/sqrtf seems to be faster than the inlined approximation?
@@ -81,6 +82,18 @@ void multABt(const float *a, const float *b, float *m)
 	m[6] = a[6] * b[0] + a[7] * b[1] + a[8] * b[2]; m[7] = a[6] * b[3] + a[7] * b[4] + a[8] * b[5]; m[8] = a[6] * b[6] + a[7] * b[7] + a[8] * b[8];
 }
 
+__host__ __device__ __forceinline__
+void neg(float *a) {
+	a[0] = -a[0];
+	a[1] = -a[1];
+	a[2] = -a[2];
+	a[3] = -a[3];
+	a[4] = -a[4];
+	a[5] = -a[5];
+	a[6] = -a[6];
+	a[7] = -a[7];
+	a[8] = -a[8];
+}
 __host__ __device__ __forceinline__
 void quatToMat3(const float * qV, float *m)
 {
@@ -321,6 +334,150 @@ void svd(//output A
 	QRDecomposition(b, u, s);
 }
 
+__host__ __device__ __forceinline__
+float det(const float *a) {
+	return a[0] * a[4]*a[8] - a[0] * a[5]*a[7] - a[0] * a[3]*a[8] + a[1] * a[5] *a[6] + a[2] * a[3] *a[7] - a[2] * a[4]*a[6];
+
+}
+
+__host__ __device__ __forceinline__
+void transpose_copy3x3(const float *a, float *b, int a_size, int b_size) { // transpose first 3x3 elements and put it in first 3x3 elements of b (regular transpose if a_size = b_size = 3)
+	b[access2(0, 0, b_size)] = a[access2(0, 0, a_size)]; b[access2(1, 1, b_size)] = a[access2(1, 1, a_size)]; b[access2(2, 2, b_size)] = a[access2(2, 2, a_size)];
+	b[access2(1, 0, b_size)] = a[access2(0, 1, a_size)]; b[access2(0, 1, b_size)] = a[access2(1, 0, a_size)];
+	b[access2(2, 0, b_size)] = a[access2(0, 2, a_size)]; b[access2(0, 2, b_size)] = a[access2(2, 0, a_size)]; // 2
+	b[access2(1, 2, b_size)] = a[access2(2, 1, a_size)]; b[access2(2, 1, b_size)] = a[access2(1, 2, a_size)]; // 5
+}
+
+__host__ __device__ __forceinline__
+bool InvertMatrix4x4(const float m[16], float invOut[16])
+{
+	float inv[16], det;
+	int i;
+
+	inv[0] = m[5] * m[10] * m[15] -
+		m[5] * m[11] * m[14] -
+		m[9] * m[6] * m[15] +
+		m[9] * m[7] * m[14] +
+		m[13] * m[6] * m[11] -
+		m[13] * m[7] * m[10];
+
+	inv[4] = -m[4] * m[10] * m[15] +
+		m[4] * m[11] * m[14] +
+		m[8] * m[6] * m[15] -
+		m[8] * m[7] * m[14] -
+		m[12] * m[6] * m[11] +
+		m[12] * m[7] * m[10];
+
+	inv[8] = m[4] * m[9] * m[15] -
+		m[4] * m[11] * m[13] -
+		m[8] * m[5] * m[15] +
+		m[8] * m[7] * m[13] +
+		m[12] * m[5] * m[11] -
+		m[12] * m[7] * m[9];
+
+	inv[12] = -m[4] * m[9] * m[14] +
+		m[4] * m[10] * m[13] +
+		m[8] * m[5] * m[14] -
+		m[8] * m[6] * m[13] -
+		m[12] * m[5] * m[10] +
+		m[12] * m[6] * m[9];
+
+	inv[1] = -m[1] * m[10] * m[15] +
+		m[1] * m[11] * m[14] +
+		m[9] * m[2] * m[15] -
+		m[9] * m[3] * m[14] -
+		m[13] * m[2] * m[11] +
+		m[13] * m[3] * m[10];
+
+	inv[5] = m[0] * m[10] * m[15] -
+		m[0] * m[11] * m[14] -
+		m[8] * m[2] * m[15] +
+		m[8] * m[3] * m[14] +
+		m[12] * m[2] * m[11] -
+		m[12] * m[3] * m[10];
+
+	inv[9] = -m[0] * m[9] * m[15] +
+		m[0] * m[11] * m[13] +
+		m[8] * m[1] * m[15] -
+		m[8] * m[3] * m[13] -
+		m[12] * m[1] * m[11] +
+		m[12] * m[3] * m[9];
+
+	inv[13] = m[0] * m[9] * m[14] -
+		m[0] * m[10] * m[13] -
+		m[8] * m[1] * m[14] +
+		m[8] * m[2] * m[13] +
+		m[12] * m[1] * m[10] -
+		m[12] * m[2] * m[9];
+
+	inv[2] = m[1] * m[6] * m[15] -
+		m[1] * m[7] * m[14] -
+		m[5] * m[2] * m[15] +
+		m[5] * m[3] * m[14] +
+		m[13] * m[2] * m[7] -
+		m[13] * m[3] * m[6];
+
+	inv[6] = -m[0] * m[6] * m[15] +
+		m[0] * m[7] * m[14] +
+		m[4] * m[2] * m[15] -
+		m[4] * m[3] * m[14] -
+		m[12] * m[2] * m[7] +
+		m[12] * m[3] * m[6];
+
+	inv[10] = m[0] * m[5] * m[15] -
+		m[0] * m[7] * m[13] -
+		m[4] * m[1] * m[15] +
+		m[4] * m[3] * m[13] +
+		m[12] * m[1] * m[7] -
+		m[12] * m[3] * m[5];
+
+	inv[14] = -m[0] * m[5] * m[14] +
+		m[0] * m[6] * m[13] +
+		m[4] * m[1] * m[14] -
+		m[4] * m[2] * m[13] -
+		m[12] * m[1] * m[6] +
+		m[12] * m[2] * m[5];
+
+	inv[3] = -m[1] * m[6] * m[11] +
+		m[1] * m[7] * m[10] +
+		m[5] * m[2] * m[11] -
+		m[5] * m[3] * m[10] -
+		m[9] * m[2] * m[7] +
+		m[9] * m[3] * m[6];
+
+	inv[7] = m[0] * m[6] * m[11] -
+		m[0] * m[7] * m[10] -
+		m[4] * m[2] * m[11] +
+		m[4] * m[3] * m[10] +
+		m[8] * m[2] * m[7] -
+		m[8] * m[3] * m[6];
+
+	inv[11] = -m[0] * m[5] * m[11] +
+		m[0] * m[7] * m[9] +
+		m[4] * m[1] * m[11] -
+		m[4] * m[3] * m[9] -
+		m[8] * m[1] * m[7] +
+		m[8] * m[3] * m[5];
+
+	inv[15] = m[0] * m[5] * m[10] -
+		m[0] * m[6] * m[9] -
+		m[4] * m[1] * m[10] +
+		m[4] * m[2] * m[9] +
+		m[8] * m[1] * m[6] -
+		m[8] * m[2] * m[5];
+
+	det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+
+	if (det == 0)
+		return false;
+
+	det = 1.0 / det;
+
+	for (i = 0; i < 16; i++)
+		invOut[i] = inv[i] * det;
+
+	return true;
+}
 /// polar decomposition can be reconstructed trivially from SVD result
 /// A = UP
 __host__ __device__ __forceinline__
