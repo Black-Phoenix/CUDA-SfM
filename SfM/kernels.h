@@ -436,6 +436,8 @@ namespace kernels {
 		if (index >= number_points)
 			return;
 		float norm_value = v[access3(3, 3, index, 4, 4)];
+		if (norm_value == 0 || abs(norm_value) > 1000)
+			norm_value = 1;
 		converted_pt[access2(x_pos, index, number_points)] = v[access3(3, x_pos, index, 4, 4)] / norm_value;
 		converted_pt[access2(y_pos, index, number_points)] = v[access3(3, y_pos, index, 4, 4)] / norm_value;
 		converted_pt[access2(z_pos, index, number_points)] = v[access3(3, z_pos, index, 4, 4)] / norm_value;
@@ -456,5 +458,34 @@ namespace kernels {
 		cudaMalloc((void**)&data, size * sizeof(T));
 		cudaMemcpy(data, host, size * sizeof(T), cudaMemcpyHostToDevice);
 		return data;
+	}
+
+	/////////////////////////////////////////////////////////////////////////
+	////////////////////viz kernels///////////////////
+	////////////////////////////////////////////////////////////////////////
+	__global__ 
+		void kernCopyPositionsToVBO(int N, float *pos, float *vbo, float s_scale) {
+		int index = threadIdx.x + (blockIdx.x * blockDim.x);
+
+		float c_scale = -1.0f / s_scale;
+
+		if (index < N) {
+			vbo[access2(index, x_pos, 4)] = pos[access2(x_pos, index, N)] * c_scale;
+			vbo[access2(index, y_pos, 4)] = pos[access2(y_pos, index, N)] * c_scale;
+			vbo[access2(index, z_pos, 4)] = pos[access2(z_pos, index, N)] * c_scale;
+			vbo[access2(index, 3, 4)] = 1.0f;
+		}
+	}
+
+	__global__ 
+		void kernCopyVelocitiesToVBO(int N, float *vel, float *vbo, float s_scale) {
+		int index = threadIdx.x + (blockIdx.x * blockDim.x);
+
+		if (index < N) {
+			vbo[4 * index + 0] = 1;//vel[index].x + 0.3f;
+			vbo[4 * index + 1] = 1;//vel[index].y + 0.3f;
+			vbo[4 * index + 2] = 1;//vel[index].z + 0.3f;
+			vbo[4 * index + 3] = 1.0f;
+		}
 	}
 }

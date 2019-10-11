@@ -296,9 +296,11 @@ namespace SfM {
 		cudaMalloc((void **)&d_d2, 4 * 4 * sizeof(float));
 		// Assumes V isnt transposed, we need to take the last row
 		// svd(d_A, d_u, d_d, d_v, 4 batches)
+		checkCUDAErrorWithLine("Before SVD");
 		int *d_info = NULL;
 		cudaMalloc((void**)&d_info, 4 * sizeof(int));
 		kernels::svd_square(d_A, d_vt, d_d, d_u, 4, 4, 4, d_info, cusolverH, stream, gesvdj_params);
+		checkCUDAErrorWithLine("SVD");
 		kernels::normalize_pt_kernal <<<1, 4 >> > (d_vt, d_d1, 4);
 		kernels::printMatrix(d_d1, 4, 4, 4, "d1");
 
@@ -361,6 +363,7 @@ namespace SfM {
 		cudaFree(d_d);
 		cudaFree(d_vt);
 		cudaFree(d_info);
+
 	}
 
 	Image_pair::~Image_pair() {
@@ -377,6 +380,31 @@ namespace SfM {
 		cudaFree(d_E);
 		cublasDestroy(handle);
 	}
+	////////////////////////////////////////
+	////////////////////////////////////////
+	__host__ __device__ unsigned int hash(unsigned int a) {
+		a = (a + 0x7ed55d16) + (a << 12);
+		a = (a ^ 0xc761c23c) ^ (a >> 19);
+		a = (a + 0x165667b1) + (a << 5);
+		a = (a + 0xd3a2646c) ^ (a << 9);
+		a = (a + 0xfd7046c5) + (a << 3);
+		a = (a ^ 0xb55a4f09) ^ (a >> 16);
+		return a;
+	}
+
+	
+	void Image_pair::copyBoidsToVBO(float *vbodptr_positions) {
+		dim3 fullBlocksPerGrid((num_points + cuda_block_size - 1) / cuda_block_size);
+		checkCUDAErrorWithLine("Not copyBoidsToVBO failed!");
+		kernels::kernCopyPositionsToVBO << <fullBlocksPerGrid, cuda_block_size >> > (num_points, d_final_points, vbodptr_positions, 100);
+		//kernCopyVelocitiesToVBO << <fullBlocksPerGrid, blockSize >> > (numObjects, dev_vel1, vbodptr_velocities, scene_scale);
+
+		checkCUDAErrorWithLine("copyBoidsToVBO failed!");
+
+		cudaDeviceSynchronize();
+	}
+
+
 	////////////////////////////////////////
 	///////			Testing       //////////
 	////////////////////////////////////////

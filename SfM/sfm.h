@@ -54,6 +54,8 @@ namespace SfM {
 		void testBatchedmultTranspose();
 		void testRow_extraction_kernel();
 		void testVecnorm();
+		///////
+		void copyBoidsToVBO(float *vbodptr_positions);
 		~Image_pair();
 	};
 }
