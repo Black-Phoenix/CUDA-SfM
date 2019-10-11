@@ -32,7 +32,7 @@
 #include <cmath>
 #include <iomanip>
 #include <cusolver_common.h>
-#include "SfM/kernels.h"
+#include "SfM/sfm.h"
 
 int ImproveHomography(SiftData &data, float *homography, int numLoops, float minScore, float maxAmbiguity, float thresh);
 void PrintMatchData(SiftData &siftData1, SiftData &siftData2, CudaImage &img);

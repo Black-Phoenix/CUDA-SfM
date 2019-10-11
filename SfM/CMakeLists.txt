@@ -2,7 +2,8 @@ set(SOURCE_FILES
     "common.h"
     "common.cu"
     "kernels.h"
-    "kernels.cu"
+    "sfm.cu"
+    "sfm.h"
     "svd.h"
     )
 
