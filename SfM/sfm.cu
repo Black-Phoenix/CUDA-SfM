@@ -75,7 +75,6 @@ namespace SfM {
 		cublasCreate(&handle);
 		// Space for final points
 		cudaMalloc((void **)&d_final_points, 4 * num_points * sizeof(float));
-
 	}
 
 	void Image_pair::estimateE() {
@@ -88,7 +87,7 @@ namespace SfM {
 		// Shufle data
 		std::random_device rd;
 		std::mt19937 g(rd());
-		//shuffle(indices, indices + num_points, g);
+		//shuffle(indices, indices + num_points, g); todo enable this 
 		// Copy data to gpu
 		cudaMemcpy(d_indices, indices, num_points * sizeof(int), cudaMemcpyHostToDevice);
 		// Calculate all kron products correctly
@@ -98,28 +97,41 @@ namespace SfM {
 		int grids = ceil((ransac_count + cuda_block_size - 1) / cuda_block_size);
 		kernels::kron_kernal << <grids, cuda_block_size >> > (X[0], X[1], d_A, d_indices, ransac_count, num_points);
 		checkCUDAErrorWithLine("Kron failed!");
-		kernels::printMatrix(X[0], 3, num_points, 9, "Kron X[0]");
-		kernels::printMatrix(X[1], 3, num_points, 9, "Kron X[1]");
-		kernels::print3DSlice(d_A, 8, 9, ransac_count - 1, 9, "Kron product");
+		
 		float *d_E_canidate;
 		cudaMalloc((void **)&d_E_canidate, 3 * 3 * ransac_count * sizeof(float));
-		// Calculate batch SVD
-
-		// Last column of V becomes E
-
+		// Calculate batch SVD of d_A
+		float *d_ut, *d_vt, *d_s;
+		cudaMalloc((void **)&d_ut, 8 * 8 * ransac_count * sizeof(float));
+		cudaMalloc((void **)&d_vt, 9 * 9 * ransac_count * sizeof(float));
+		cudaMalloc((void **)&d_s, 8 * ransac_count * sizeof(float));
+		int *d_info = NULL;
+		cudaMalloc((void**)&d_info, 4 * sizeof(int));
+		kernels::regular_svd(d_A, d_ut, d_s, d_vt, 8, 9, ransac_count, d_info, cusolverH, gesvdj_params);
+		// Last column of V becomes E (row of v' in our case)
+		int blocks = ceil((ransac_count + cuda_block_size - 1) / cuda_block_size);
+		kernels::row_extraction_kernel << <blocks, cuda_block_size >> > (d_vt, d_E_canidate, ransac_count);
 		// Calculate target E's
 		kernels::normalizeE << <grids, cuda_block_size >> > (d_E_canidate, ransac_count);
+		
 		// Calculate number of inliers for each E
 		int *inliers = calculateInliers(d_E_canidate, ransac_count);
+		kernels::printVector(inliers, ransac_count, "inliers");
 		// Pick best E and allocate d_E and E using thrust
 		thrust::device_ptr<int> dv_in(inliers);
 		auto iter = thrust::max_element(dv_in, dv_in + ransac_count);
 		unsigned int best_pos = (iter - dv_in) - 1;
 		// Assigne d_E
 		cudaMemcpy(d_E, &(d_E_canidate[access3(0, 0, best_pos, 3, 3)]), 3 * 3 * sizeof(float), cudaMemcpyDeviceToDevice);
+		kernels::printMatrix(d_E, 3, 3, 3, "d_E!!!");
 		// Free stuff
 		cudaFree(inliers);
 		cudaFree(d_A);
+		// svd free
+		cudaFree(d_ut);
+		cudaFree(d_s);
+		cudaFree(d_vt);
+		cudaFree(d_info);
 		cudaFree(d_indices);
 		free(indices);
 		cudaFree(d_E_canidate);
@@ -159,6 +171,7 @@ namespace SfM {
 		// Calculate x1 (from matlab code) {
 		int m = 3, k = 3, n = num_points;
 		kernels::gpu_blas_mmul_batched(d_E_canidate, X[0], x1_transformed, m, k, n, m * k, 0, m * n, ransac_iter, handle);
+
 		//Compute n1 
 		m = num_points, k = 3, n = 3; // these probably need to change because we need to transpose X[1]
 		kernels::gpu_blas_mmul_transpose_batched(X[1], d_E_canidate, n1, m, k, n, 0, 3 * 3, m * n, ransac_iter, handle); // transpose X[1]
@@ -203,7 +216,7 @@ namespace SfM {
 		kernels::element_wise_sum << <blocks, cuda_block_size >> > (norm_n1, norm_n2, size);
 		// Calculate inliers per cell
 		blocks = ceil((ransac_iter + cuda_block_size - 1) / cuda_block_size);
-		kernels::threshold_count << <blocks, cuda_block_size >> > (norm_n1, inliers, num_points, ransac_iter, 1e-5);
+		kernels::threshold_count << <blocks, cuda_block_size >> > (norm_n1, inliers, num_points, ransac_iter, 1e-5); // tested
 		//}
 		// Not sure if we should free
 		cudaFree(n1);
@@ -224,8 +237,8 @@ namespace SfM {
 
 	void Image_pair::computePoseCanidates() {
 		// Tested
-		float E[9] = { 1,2,3,4,5,6,7,8,9 }; // TODO remove this once testing is done
-		//cudaMemcpy(E, d_E, 3 * 3 * sizeof(float), cudaMemcpyDeviceToHost);
+		float E[9];// = { -0.211 , -0.798 , -0.561, -0.967 , 0.252  , 0.009, 0.046  , 0.047  , 0.039 }; // TODO remove this once testing is done
+		cudaMemcpy(E, d_E, 3 * 3 * sizeof(float), cudaMemcpyDeviceToHost);
 		float u[9], d[9], v[9], tmp[9];
 		svd(E, u, d, v); // v is not transposed
 		multABt(u, v, tmp); // u * v'
@@ -269,14 +282,14 @@ namespace SfM {
 		float *d_A, *d_u, *d_d, *d_vt;
 		cudaMalloc((void **)&d_A, 4 * 4 * 4 * sizeof(float));
 		cudaMalloc((void **)&d_u, 4 * 4 * 4 * sizeof(float));
-		cudaMalloc((void **)&d_d, 4 * 4 * 4 * sizeof(float));
+		cudaMalloc((void **)&d_d, 4 * 4 * sizeof(float));
 		cudaMalloc((void **)&d_vt, 4 * 4 * 4 * sizeof(float));
 		// Create A
 
 		dim3 blocks(1, 1);
 		dim3 block_sizes(4, 2);
 		kernels::compute_linear_triangulation_A << <blocks, block_sizes >> > (d_A, X[0], X[1], 4, num_points, d_P1, d_P, -1, true);
-		
+		kernels::print3DSlice(d_A, 4, 4, 0, 4, "d_A");
 		// We only care about V
 		float *d_d1, *d_d2; // 3x4 batched
 		cudaMalloc((void **)&d_d1, 4 * 4 * sizeof(float));
@@ -289,14 +302,13 @@ namespace SfM {
 		kernels::normalize_pt_kernal <<<1, 4 >> > (d_vt, d_d1, 4);
 		kernels::printMatrix(d_d1, 4, 4, 4, "d1");
 
-		float *d_P2_inv;
 		float val_d1, val_d2;
-		cudaMalloc((void **)&d_P2_inv, 4 * 4 * sizeof(float));
+		P_ind = 0;
 		for (int i = 0; i < 4; i++) { // batched doesn't work for inverse + it is only 4, 4x4 matrices, should be easy
-			kernels::invert(d_P + i * 4 * 4, d_P2_inv, 4, 1, handle);
+			kernels::invert(d_P + i * 4 * 4, d_P + i * 4 * 4, 4, 1, handle);
 			int m = 4, k = 4, n = 4;
-			kernels::gpu_blas_mmul(d_P2_inv, d_d1, d_d2, m, k, n, handle);
-			kernels::print3DSlice(d_P2_inv, 4, 4, 0, 4, "d_P2_inv");
+			kernels::gpu_blas_mmul(d_P + i * 4 * 4, d_d1, d_d2, m, k, n, handle);
+			kernels::print3DSlice(d_P + i * 4 * 4, 4, 4, 0, 4, "d_P2_inv");
 			kernels::printMatrix(d_d2, 4, 4, 4, "d2");
 			// Do the final testing on the host
 			cudaMemcpy(&val_d1, &(d_d1[access2(2, i, 4)]), sizeof(float), cudaMemcpyDeviceToHost);
@@ -305,8 +317,6 @@ namespace SfM {
 			if (val_d1 > 0 && val_d2 > 0)
 				P_ind = i;
 		}
-		
-		cudaFree(d_P2_inv);
 		cudaFree(d_P1);
 		cudaFree(d_A);
 		cudaFree(d_u);
@@ -325,7 +335,7 @@ namespace SfM {
 		float *d_A, *d_u, *d_d, *d_vt;
 		cudaMalloc((void **)&d_A, 4 * 4 * num_points * sizeof(float));
 		cudaMalloc((void **)&d_u, 4 * 4 * num_points * sizeof(float));
-		cudaMalloc((void **)&d_d, 4 * 4 * num_points * sizeof(float));
+		cudaMalloc((void **)&d_d, 4 * num_points * sizeof(float));
 		cudaMalloc((void **)&d_vt, 4 * 4 * num_points * sizeof(float));
 		// Create A
 
@@ -473,5 +483,26 @@ namespace SfM {
 		cudaFree(d_A);
 		cudaFree(d_B);
 		cudaFree(d_C);
+	}
+	void Image_pair::testRow_extraction_kernel() {
+		float data[9 * 9 * 9];
+		for (int i = 0; i < 9 * 9 * 9; i++)
+			data[i] = i;
+		float *d_d = kernels::cuda_alloc_copy(data, 9 * 9 * 9);
+		float *res;
+		cudaMalloc((void**)&res, 9 * 9 * sizeof(float));
+
+		kernels::row_extraction_kernel << <1, 9 >> > (d_d, res, 9);
+		kernels::printMatrix(res, 9, 9, 9, "res");
+		cudaFree(res);
+		cudaFree(d_d);
+	}
+	void Image_pair::testVecnorm() {
+		float test[9] = { 1,2,3,4,5,6,7,8,9 };
+		float *test_gpu = kernels::cuda_alloc_copy(test, 9 * sizeof(float));
+		float *norm_n1;
+		cudaMalloc((void**)&norm_n1, 3 * sizeof(float));
+		kernels::vecnorm << <1, 3 >> > (test_gpu, norm_n1, 3, 3, 2, 1);
+		kernels::printMatrix(norm_n1, 3, 1, 1, "norm");
 	}
 }

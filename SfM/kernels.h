@@ -84,7 +84,7 @@ namespace kernels {
 			for (int j = 0; j < col; j++) {
 				if (j < print_col || j > col - print_col - 1) {
 					T Areg = print_a[access2(i, j, col)];
-					cout << std::setw(7) << setprecision(3) << "\t" << Areg;
+					cout << std::setw(5) << setprecision(3) << "\t" << Areg;
 				}
 				else if (j == print_col) {
 					cout << "\t....";
@@ -208,7 +208,7 @@ namespace kernels {
 		}
 	}
 
-	void svd_device_transpose(float *src, float *UT, float *S, float *VT, int m, int n, const int batchSize, int *d_info, cusolverDnHandle_t cusolverH, gesvdjInfo_t gesvdj_params) {
+	void regular_svd(float *src, float *UT, float *S, float *VT, int m, int n, const int batchSize, int *d_info, cusolverDnHandle_t cusolverH, gesvdjInfo_t gesvdj_params) {
 		float *d_A_trans = NULL;
 		cudaMalloc((void **)&d_A_trans, 8 * 9 * batchSize * sizeof(float));
 		for (int i = 0; i < batchSize; i++) {
@@ -323,7 +323,7 @@ namespace kernels {
 	}
 
 	__global__
-		void vecnorm(float *A, float *res, int row, int col, int exp, int final_pow) {
+		void vecnorm(float *A, float *res, int row, int col, float exp, float final_pow) {
 		int index = blockIdx.x*blockDim.x + threadIdx.x;
 		if (index >= col)
 			return;
@@ -333,8 +333,10 @@ namespace kernels {
 			tmp_vlaue += powf(A[access2(i, index, col)], exp);
 		}
 		// Now we can take the sqrt of exp and then rais to the final_pow
-		if (exp == final_pow)
+		if (exp == final_pow) {
+			res[index] = tmp_vlaue;
 			return;
+		}
 		res[index] = powf(tmp_vlaue, final_pow / exp);
 	}
 
@@ -438,6 +440,14 @@ namespace kernels {
 		converted_pt[access2(y_pos, index, number_points)] = v[access3(3, y_pos, index, 4, 4)] / norm_value;
 		converted_pt[access2(z_pos, index, number_points)] = v[access3(3, z_pos, index, 4, 4)] / norm_value;
 		converted_pt[access2(3, index, number_points)] = 1;
+	}
+
+	__global__
+		void row_extraction_kernel(float *d_vt, float *d_E, int number_points) { // assumes size of converted_pt is 4xnum_points and v is 4x4xnum_points
+		int index = blockIdx.x*blockDim.x + threadIdx.x; // one per num_points
+		if (index >= number_points)
+			return;
+		memcpy(d_E + 9 * index, d_vt + 9 * 9 *index + 9 * 8, 3 * 3 * sizeof(float)); // the final 9 * 8 is because we want the last row
 	}
 
 	template<typename T>

@@ -52,6 +52,8 @@ namespace SfM {
 		void testThrust_max();
 		void testInverse();
 		void testBatchedmultTranspose();
+		void testRow_extraction_kernel();
+		void testVecnorm();
 		~Image_pair();
 	};
 }
