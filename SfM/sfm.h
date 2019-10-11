@@ -55,7 +55,7 @@ namespace SfM {
 		void testRow_extraction_kernel();
 		void testVecnorm();
 		///////
-		void copyBoidsToVBO(float *vbodptr_positions);
+		void copyBoidsToVBO(float *vbodptr_positions, float *vbodptr_velocities);
 		~Image_pair();
 	};
 }

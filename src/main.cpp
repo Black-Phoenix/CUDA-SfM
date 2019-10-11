@@ -171,7 +171,7 @@ bool init(int num_pts) {
 
 	// Default to device ID 0. If you have more than one GPU and want to test a non-default one,
 	// change the device ID.
-	//cudaGLSetGLDevice(0);
+	cudaGLSetGLDevice(0);
 	checkCUDAErrorWithLine("set GLSet init failed!");
 
 	cudaGLRegisterBufferObject(boidVBO_positions);
@@ -241,6 +241,7 @@ void initVAO(int num_pts) {
 ///////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv)
 {
+	init(10000);
 	int devNum = 0, imgSet = 0;
 	if (argc > 1)
 		devNum = std::atoi(argv[1]);
@@ -303,7 +304,6 @@ int main(int argc, char **argv)
 	sfm.choosePose();
 	sfm.linear_triangulation();
 	// Viz
-	init(siftData1.numPts);
 	double fps = 0;
 	double timebase = 0;
 	int frame = 0;
@@ -330,10 +330,11 @@ int main(int argc, char **argv)
 		float *dptrVertPositions = NULL;
 		float *dptrVertVelocities = NULL;
 		cudaGLMapBufferObject((void**)&dptrVertPositions, boidVBO_positions);
-		//cudaGLMapBufferObject((void**)&dptrVertVelocities, boidVBO_velocities);
+		cudaGLMapBufferObject((void**)&dptrVertVelocities, boidVBO_velocities);
 		checkCUDAErrorWithLine("mapping viz failed!");
-		sfm.copyBoidsToVBO(dptrVertPositions);
+		sfm.copyBoidsToVBO(dptrVertPositions, dptrVertVelocities);
 		cudaGLUnmapBufferObject(boidVBO_positions);
+		cudaGLUnmapBufferObject(boidVBO_velocities);
 
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glUseProgram(program[PROG_BOID]);

@@ -393,11 +393,11 @@ namespace SfM {
 	}
 
 	
-	void Image_pair::copyBoidsToVBO(float *vbodptr_positions) {
+	void Image_pair::copyBoidsToVBO(float *vbodptr_positions, float *vbodptr_velocities) {
 		dim3 fullBlocksPerGrid((num_points + cuda_block_size - 1) / cuda_block_size);
 		checkCUDAErrorWithLine("Not copyBoidsToVBO failed!");
-		kernels::kernCopyPositionsToVBO << <fullBlocksPerGrid, cuda_block_size >> > (num_points, d_final_points, vbodptr_positions, 100);
-		//kernCopyVelocitiesToVBO << <fullBlocksPerGrid, blockSize >> > (numObjects, dev_vel1, vbodptr_velocities, scene_scale);
+		kernels::kernCopyPositionsToVBO << <fullBlocksPerGrid, cuda_block_size >> > (num_points, d_final_points, vbodptr_positions, 1);
+		kernels::kernCopyVelocitiesToVBO << <fullBlocksPerGrid, cuda_block_size >> > (num_points, vbodptr_velocities, 1);
 
 		checkCUDAErrorWithLine("copyBoidsToVBO failed!");
 
