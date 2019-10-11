@@ -653,6 +653,7 @@ namespace SfM {
 	}
 
 	void Image_pair::computePoseCanidates() {
+		// Tested
 		float E[9] = { 1,2,3,4,5,6,7,8,9 }; // TODO remove this once testing is done
 		//cudaMemcpy(E, d_E, 3 * 3 * sizeof(float), cudaMemcpyDeviceToHost);
 		float u[9], d[9], v[9], tmp[9];
@@ -669,7 +670,30 @@ namespace SfM {
 	}
 
 	void Image_pair::choosePose() {
-		// take point 
+		////Debugging{
+		//	float *d_P_debugging;
+		//	float x[] = { 1,2,1,2,
+		//				2,1,2,1,
+		//				1,1,2,2,
+		//				1,2,2,1,
+		//				
+		//				1,1,2,2,
+		//				1,2,1,2,
+		//				2,1,2,1,
+		//				1,2,2,1,
+		//		
+		//				1,2,1,2,
+		//				1,1,2,2,
+		//				2,1,2,1,
+		//				1,2,2,1,
+		//				
+		//				1,2,2,1,
+		//				1,2,1,2,
+		//				2,1,2,1,
+		//				1,1,2,2};
+		//	d_P_debugging = kernels::cuda_alloc_copy(x, 4 * 4 * 4);
+		////}
+		// take 1 point and figure out if it is in front of the camera or behind
 		float P1[16] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 }; // I(4)
 		float *d_P1 = kernels::cuda_alloc_copy(P1, 16);
 		float *d_A, *d_u, *d_d, *d_vt;
@@ -681,7 +705,7 @@ namespace SfM {
 
 		dim3 blocks(1, 1);
 		dim3 block_sizes(4, 2);
-		kernels::compute_linear_triangulation_A << <blocks, block_sizes >> > (d_A, X[0], X[1], 4, num_points, d_P1, d_P, -1, true);
+		kernels::compute_linear_triangulation_A << <blocks, block_sizes >> > (d_A, X[0], X[1], 4, num_points, d_P1, d_P_debugging, -1, true); // todo change d_P_debugging back to d_P
 		
 		// We only care about V
 		float *d_d1, *d_d2; // 3x4 batched
@@ -689,26 +713,29 @@ namespace SfM {
 		cudaMalloc((void **)&d_d2, 4 * 4 * sizeof(float));
 		// Assumes V isnt transposed, we need to take the last row
 		// svd(d_A, d_u, d_d, d_v, 4 batches)
-		int *info = NULL;
-		kernels::svd_square(d_A, d_vt, d_d, d_u, 4, 4, 4, info, cusolverH, stream, gesvdj_params);
+		int *d_info = NULL;
+		cudaMalloc((void**)&d_info, 4 * sizeof(int));
+		kernels::svd_square(d_A, d_vt, d_d, d_u, 4, 4, 4, d_info, cusolverH, stream, gesvdj_params);
 		kernels::normalize_pt_kernal <<<1, 4 >> > (d_vt, d_d1, 4);
+		kernels::printMatrix(d_d1, 4, 4, 4, "d1");
 
 		float *d_P2_inv;
-		cudaMalloc((void **)&d_P2_inv, 4 * 4 * 4 * sizeof(float));
-		for (int i = 0; i < 4; i++) // batched doesn't work + it is only 4, 4x4 matrices, should be easy
-			kernels::invert(d_P + i * 4 * 4, d_P2_inv + i * 4 * 4, 4, 1, handle);
-		//A(m, k) * B(k, n)
-		kernels::gpu_blas_mmul_batched(d_P2_inv, d_d1, d_d2, 4, 4, 1, 4 * 4, 4, 4, 4, handle);
-
-		float d1[4 * 4], d2[4 * 4];
-		// Do the final testing on the host
-		cudaMemcpy(d1, d_d1, 3 * 4 * sizeof(float), cudaMemcpyDeviceToHost);
-		cudaMemcpy(d1, d_d2, 3 * 4 * sizeof(float), cudaMemcpyDeviceToHost);
-		// Now we do the final check on the cpu as well, because it is the same ease
-		for (int i = 0; i < 4; i++)
-			if (d1[access2(2, i, 4)] > 0 && d2[access2(2, i, 4)] > 0)
+		float val_d1, val_d2;
+		cudaMalloc((void **)&d_P2_inv, 4 * 4 * sizeof(float));
+		for (int i = 0; i < 4; i++) { // batched doesn't work for inverse + it is only 4, 4x4 matrices, should be easy
+			kernels::invert(d_P_debugging + i * 4 * 4, d_P2_inv, 4, 1, handle); // todo change back d_P_debugging
+			int m = 4, k = 4, n = 4;
+			kernels::gpu_blas_mmul(d_P2_inv, d_d1, d_d2, m, k, n, handle);
+			kernels::print3DSlice(d_P2_inv, 4, 4, 0, 4, "d_P2_inv");
+			kernels::printMatrix(d_d2, 4, 4, 4, "d2");
+			// Do the final testing on the host
+			cudaMemcpy(&val_d1, &(d_d1[access2(2, i, 4)]), sizeof(float), cudaMemcpyDeviceToHost);
+			cudaMemcpy(&val_d2, &(d_d2[access2(2, i, 4)]), sizeof(float), cudaMemcpyDeviceToHost);
+			// Now we do the final check on the cpu as well, because it is the same ease
+			if (val_d1 > 0 && val_d2 > 0)
 				P_ind = i;
-
+		}
+		
 		cudaFree(d_P2_inv);
 		cudaFree(d_P1);
 		cudaFree(d_A);
@@ -717,6 +744,7 @@ namespace SfM {
 		cudaFree(d_vt);
 		cudaFree(d_d1);
 		cudaFree(d_d2);
+		cudaFree(d_info);
 	}
 
 	void Image_pair::linear_triangulation() {
@@ -752,6 +780,7 @@ namespace SfM {
 		cudaFree(d_u);
 		cudaFree(d_d);
 		cudaFree(d_vt);
+		cudaFree(d_info);
 	}
 
 	Image_pair::~Image_pair() {

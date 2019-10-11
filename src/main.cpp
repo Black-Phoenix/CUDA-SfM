@@ -103,10 +103,10 @@ int main(int argc, char **argv)
 	SfM::Image_pair sfm(K, inv_K, 2, siftData1.numPts);
 	sfm.fillXU(siftData1.d_data);
 	//sfm.estimateE();
-	/*sfm.computePoseCanidates();
-	sfm.choosePose();*/
-	sfm.testSVD();
-	sfm.linear_triangulation();
+	/*sfm.computePoseCanidates();*/
+	sfm.choosePose();
+	//sfm.testSVD();
+	//sfm.linear_triangulation();
 	//sfm.computePoseCanidates();
 	//showCorrespondence(siftData1, siftData2, limg, rimg);
 	// Free Sift data from device
