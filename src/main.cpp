@@ -32,7 +32,7 @@
 #include <cmath>
 #include <iomanip>
 #include <cusolver_common.h>
-#include "SfM/kernals.h"
+#include "SfM/kernels.h"
 
 int ImproveHomography(SiftData &data, float *homography, int numLoops, float minScore, float maxAmbiguity, float thresh);
 void PrintMatchData(SiftData &siftData1, SiftData &siftData2, CudaImage &img);
@@ -103,8 +103,10 @@ int main(int argc, char **argv)
 	SfM::Image_pair sfm(K, inv_K, 2, siftData1.numPts);
 	sfm.fillXU(siftData1.d_data);
 	//sfm.estimateE();
-	sfm.computePoseCanidates();
-	sfm.choosePose();
+	/*sfm.computePoseCanidates();
+	sfm.choosePose();*/
+	sfm.testSVD();
+	sfm.linear_triangulation();
 	//sfm.computePoseCanidates();
 	//showCorrespondence(siftData1, siftData2, limg, rimg);
 	// Free Sift data from device

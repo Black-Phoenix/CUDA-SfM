@@ -7,9 +7,12 @@
 #include "svd.h"
 #include <CudaSift/cudaSift.h>
 #include <vector>
+#include <cusolverDn.h>
+
 using namespace std;
+
 #define checkCUDAErrorWithLine(msg) checkCUDAError(msg, __LINE__)
-namespace Kernals {
+namespace kernels {
 	Common::PerformanceTimer& timer();
 }
 
@@ -27,6 +30,11 @@ namespace SfM {
 		// Points
 		vector<float *> U; // We only use 2, this can be "extended"
 		vector<float *> X;
+		float *d_final_points;
+		// svd handles
+		cusolverDnHandle_t cusolverH = NULL;
+		cudaStream_t stream = NULL;
+		gesvdjInfo_t gesvdj_params = NULL;
 		// Handles
 		cublasHandle_t handle;
 		// Internal functions
@@ -39,19 +47,12 @@ namespace SfM {
 		void testSVD();
 		void computePoseCanidates();
 		void choosePose();
+		void linear_triangulation();
+		// Testing functions
 		void testBatchedmult();
 		void testThrust_max();
-		~Image_pair() {
-			cudaFree(d_K);
-			cudaFree(d_K_inv);
-			// Free vector points
-			for (auto x : X)
-				cudaFree(x);
-			for (auto x : U)
-				cudaFree(x);
-			// E
-			cudaFree(d_P);
-			cudaFree(d_E);
-		}
+		void testInverse();
+		void testBatchedmultTranspose();
+		~Image_pair();
 	};
 }
