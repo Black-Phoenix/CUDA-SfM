@@ -16,12 +16,12 @@
 #include "svd.h"
 
 namespace kernels {
-#define enable_debug true
+#define enable_debug false
 #define esp 1e-5
 #define x_pos 0
 #define y_pos 1
 #define z_pos 2
-	
+
 	using Common::PerformanceTimer;
 	PerformanceTimer& timer()
 	{
@@ -172,7 +172,7 @@ namespace kernels {
 		cudaFree(src);
 	}
 
-	void svd_square(float *src, float *VT, float *S, float *U, int m, int n, const int batchSize, int *d_info, 
+	void svd_square(float *src, float *VT, float *S, float *U, int m, int n, const int batchSize, int *d_info,
 		cusolverDnHandle_t cusolverH, cudaStream_t stream, gesvdjInfo_t gesvdj_params) {
 		assert(m == n);
 		const int minmn = (m < n) ? m : n;
@@ -214,7 +214,7 @@ namespace kernels {
 		for (int i = 0; i < batchSize; i++) {
 			dim3 blocks(10, 10);
 			dim3 fullBlocksPerGrid(1, 1);
-			transpose <<< fullBlocksPerGrid, blocks >> > (d_A_trans + i * 8 * 9, src + i * 8 * 9, 9, 8);
+			transpose << < fullBlocksPerGrid, blocks >> > (d_A_trans + i * 8 * 9, src + i * 8 * 9, 9, 8);
 		}
 		const int minmn = (m < n) ? m : n;
 		const int lda = m;
@@ -234,7 +234,7 @@ namespace kernels {
 	}
 
 	__global__
-		void kron_kernal(float*d1, float*d2, float *A, int *indices, const int ransac_iterations, int num_points) {
+		void kernels(float*d1, float*d2, float *A, int *indices, const int ransac_iterations, int num_points) {
 		const int index = blockIdx.x*blockDim.x + threadIdx.x;
 		const int A_row = 8;
 		const int A_col = 9;
@@ -355,29 +355,29 @@ namespace kernels {
 	}
 
 	__global__
-		void canidate_kernels(float *d_P, const float *u, const float *v) {
+		void candidate_kernels(float *d_P, const float *u, const float *v) {
 		int index = blockIdx.x*blockDim.x + threadIdx.x;
-		if (index >= 4) // only 4 canidate positions exist so fixed value
+		if (index >= 4) // only 4 candidate positions exist so fixed value
 			return;
 		float W[9] = { 0, -1, 0, 1, 0, 0, 0, 0, 1 }; // rotation about z axis
 		float Wt[9]; transpose_copy3x3(W, Wt, 3, 3);
-		float canidate_P[4 * 4];
+		float candidate_P[4 * 4];
 
 		float tmp_prod[9], tmp_prod2[9], T[9];
 		// T
-		canidate_P[access2(x_pos, 3, 4)] = ((!index || index == 2) ? -1 : 1) * u[access2(x_pos, 2, 3)];
-		canidate_P[access2(y_pos, 3, 4)] = ((!index || index == 2) ? -1 : 1) * u[access2(y_pos, 2, 3)];
-		canidate_P[access2(z_pos, 3, 4)] = ((!index || index == 2) ? -1 : 1) * u[access2(z_pos, 2, 3)];
+		candidate_P[access2(x_pos, 3, 4)] = ((!index || index == 2) ? -1 : 1) * u[access2(x_pos, 2, 3)];
+		candidate_P[access2(y_pos, 3, 4)] = ((!index || index == 2) ? -1 : 1) * u[access2(y_pos, 2, 3)];
+		candidate_P[access2(z_pos, 3, 4)] = ((!index || index == 2) ? -1 : 1) * u[access2(z_pos, 2, 3)];
 		// R
 		if (index < 2)
 			multABt(W, v, tmp_prod);
 		else
 			multABt(Wt, v, tmp_prod);
 		multAB(u, tmp_prod, tmp_prod2); // 3x3 transpose
-		transpose_copy3x3(tmp_prod2, canidate_P, 3, 4);
+		transpose_copy3x3(tmp_prod2, candidate_P, 3, 4);
 		// Now we copy from 2d to 3d into d_P
 		//d_P[index] = index;
-		memcpy(&(d_P[access3(0, 0, index, 4, 4)]), canidate_P, 4 * 4 * sizeof(float));
+		memcpy(&(d_P[access3(0, 0, index, 4, 4)]), candidate_P, 4 * 4 * sizeof(float));
 		d_P[access3(3, 0, index, 4, 4)] = 0; // Set last row maually
 		d_P[access3(3, 1, index, 4, 4)] = 0;
 		d_P[access3(3, 2, index, 4, 4)] = 0;
@@ -385,16 +385,16 @@ namespace kernels {
 	}
 
 	__global__
-		void compute_linear_triangulation_A(float *A, const float *pt1, const float *pt2, const int count, const int num_points, const float *m1, const float *m2, int P_ind, bool canidate_m2) {
-		// if canidate_m2,  we are computing 4 A's for different m2
+		void compute_linear_triangulation_A(float *A, const float *pt1, const float *pt2, const int count, const int num_points, const float *m1, const float *m2, int P_ind, bool candidate_m2) {
+		// if candidate_m2,  we are computing 4 A's for different m2
 		// Points are 3xN and Projection matrices are 4x4
-		int index = blockIdx.x*blockDim.x + threadIdx.x;
-		int row = blockIdx.y*blockDim.y + threadIdx.y; // 2 rows, x, y
+		int index = blockIdx.x * blockDim.x + threadIdx.x;
+		int row = blockIdx.y * blockDim.y + threadIdx.y; // 2 rows, x, y
 		if (index >= count || row >= 2)
 			return;
 		float tmp_A[2 * 4], valx, valy;
 		const float *correct_pt, *correct_m;
-		if (canidate_m2) {
+		if (candidate_m2) {
 			assert(count == 4);
 
 			if (!row) { // Slightly help with the warp divergence here
@@ -436,10 +436,10 @@ namespace kernels {
 		if (index >= number_points)
 			return;
 		float norm_value = v[access3(3, 3, index, 4, 4)];
-		if (norm_value == 0 || abs(norm_value) > 10) {
-			converted_pt[access2(x_pos, index, number_points)] = 1;
-			converted_pt[access2(y_pos, index, number_points)] = 1;
-			converted_pt[access2(z_pos, index, number_points)] = 1;
+		if (norm_value == 0 || abs(norm_value) > 5) {
+			converted_pt[access2(x_pos, index, number_points)] = 0;
+			converted_pt[access2(y_pos, index, number_points)] = 0;
+			converted_pt[access2(z_pos, index, number_points)] = 0;
 		}
 		else {
 			converted_pt[access2(x_pos, index, number_points)] = v[access3(3, x_pos, index, 4, 4)] / norm_value;
@@ -454,7 +454,7 @@ namespace kernels {
 		int index = blockIdx.x*blockDim.x + threadIdx.x; // one per num_points
 		if (index >= number_points)
 			return;
-		memcpy(d_E + 9 * index, d_vt + 9 * 9 *index + 9 * 8, 3 * 3 * sizeof(float)); // the final 9 * 8 is because we want the last row
+		memcpy(d_E + 9 * index, d_vt + 9 * 9 * index + 9 * 8, 3 * 3 * sizeof(float)); // the final 9 * 8 is because we want the last row
 	}
 
 	template<typename T>
@@ -468,7 +468,7 @@ namespace kernels {
 	/////////////////////////////////////////////////////////////////////////
 	////////////////////viz kernels///////////////////
 	////////////////////////////////////////////////////////////////////////
-	__global__ 
+	__global__
 		void kernCopyPositionsToVBO(int N, float *pos, float *vbo, float s_scale) {
 		int index = threadIdx.x + (blockIdx.x * blockDim.x);
 
@@ -482,7 +482,7 @@ namespace kernels {
 		}
 	}
 
-	__global__ 
+	__global__
 		void kernCopyVelocitiesToVBO(int N, float *vbo, float s_scale) {
 		int index = threadIdx.x + (blockIdx.x * blockDim.x);
 

@@ -24,7 +24,7 @@ namespace SfM {
 		int num_points;
 		float *d_E;
 		int P_ind;
-		// Canidate Transforms
+		// candidate Transforms
 		float *d_P; // 4 elements
 		// Points
 		vector<float *> U; // We only use 2, this can be "extended"
@@ -38,13 +38,13 @@ namespace SfM {
 		cublasHandle_t handle;
 		// Internal functions
 		void batch_svd_device(float *A, float *U, float *S, float *V, int m, int n, const int batchSize, int *d_info);
-		int * calculateInliers(float *d_E_canidate, int ransac_iter);
+		int * calculateInliers(float *d_E_candidate, int ransac_iter);
 	public:
 		Image_pair(float k[9], float k_inv[9], int image_count, int num_points);
 		void fillXU(SiftPoint *data);
 		void estimateE();
 		void testSVD();
-		void computePoseCanidates();
+		void computePosecandidates();
 		void choosePose();
 		void linear_triangulation();
 		// Testing functions
