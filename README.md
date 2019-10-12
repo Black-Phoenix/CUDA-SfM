@@ -4,7 +4,7 @@ Project 4 SfM on CUDA
 **University of Pennsylvania, CIS 565: GPU Programming and Architecture, Project 0**
 
 * Name: Vaibhav Arcot
-  *  [LinkedIn] (https://www.linkedin.com/in/vaibhav-arcot-129829167/)
+  *  [LinkedIn](https://www.linkedin.com/in/vaibhav-arcot-129829167/)
 * Tested on: Windows 10, i7-7700HQ @ 2.8GHz (3.8 Boost) 32GB, External GTX 1080Ti, 11G (My personal laptop)
 * Worked on this project with Dewang Sultania(@Iron-Stark)
 
@@ -45,9 +45,9 @@ To test our algorithm, we decided to run our code on the 3d dinosaur model. The 
 
 ![](./img/dino2.jpg)
 
-![](./img/dino.PNG)
+![](./img/dino.png)
 
-![](./img/second_dino.PNG)
+![](./img/second_dino.png)
 
 The stray points in the image are from the fact that we did not filter the points using a homograph to find outlier matches. This would result in a cleaner appearance.
 
@@ -89,7 +89,7 @@ For time metrics, below is shown the various stages and the time they take on th
 
 Some important references were
 
-- [Eight point algorithm](http://ece631web.groups.et.byu.net/Lectures/ECEn631 13 - 8 Point Algorithm.pdf)
+- [Eight point algorithm](http://ece631web.groups.et.byu.net/Lectures/ECEn631%2013%20-%208%20Point%20Algorithm.pdf)
 - [Multiple View Geometry in Computer Vision (Hartley & Zisserman)](http://www.robots.ox.ac.uk/~vgg/hzbook/)
 - [alyssaq's 3D reconstruction](https://github.com/alyssaq/3Dreconstruction)
 - [CudaSift](https://github.com/Celebrandil/CudaSift)
